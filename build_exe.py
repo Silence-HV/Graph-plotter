@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Versionsnummer
-VERSION = "1.0"
+VERSION = "1.1"
 
 # Pfade definieren
 project_dir = Path(__file__).parent
