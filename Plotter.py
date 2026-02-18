@@ -13,7 +13,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.1"
+VERSION = "1.2"
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -629,6 +629,11 @@ class GraphPlotter(QMainWindow):
             
             # Alle Datensätze zeichnen
             any_data_plotted = False
+            
+            # Transparenz basierend auf Anzahl der Graphen
+            num_datasets = len(self.datasets)
+            line_alpha = 0.7 if num_datasets > 1 else 1.0
+            
             for idx, dataset in enumerate(self.datasets):
                 # Skaliere die Daten
                 scaled_time = np.array([t * x_scale_factor for t in dataset['time']])
@@ -666,7 +671,7 @@ class GraphPlotter(QMainWindow):
                         
                         # Mittelwert-Linie zeichnen
                         ax.plot(filtered_time, filtered_values, color=color, 
-                                linewidth=2, marker='', label=f'{label} (Mittelwert)')
+                                linewidth=2, marker='', label=f'{label} (Mittelwert)', alpha=line_alpha)
                         any_data_plotted = True
                 else:
                     # Standard-Modus: Normale Darstellung
@@ -681,7 +686,7 @@ class GraphPlotter(QMainWindow):
                     
                     if filtered_time:
                         ax.plot(filtered_time, filtered_values, color=color, marker='o', 
-                                linewidth=2, markersize=4, label=label)
+                                linewidth=2, markersize=4, label=label, alpha=line_alpha)
                         any_data_plotted = True
             
             if not any_data_plotted:
