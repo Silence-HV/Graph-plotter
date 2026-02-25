@@ -13,7 +13,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.2"
+VERSION = "1.3"
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -82,6 +82,9 @@ class GraphPlotter(QMainWindow):
         # Mehrere Datensätze speichern
         self.datasets = []  # Liste mit {'path': ..., 'time': [...], 'values': [...], 'label': ...}
         self.file_path = None
+        
+        # Achsenzuordnungen für Datensätze (Index -> 'y1' oder 'y2')
+        self.axis_assignments = {}
         
         # UI erstellen
         self.init_ui()
@@ -219,6 +222,71 @@ class GraphPlotter(QMainWindow):
         y_scale_layout.addWidget(self.y_scale_combo)
         layout.addLayout(y_scale_layout)
         
+        # Y-Tick für primäre Achse
+        y_tick_layout = QHBoxLayout()
+        y_tick_layout.addWidget(QLabel("Y-Tick Abstand:"))
+        self.y_tick_input = QLineEdit()
+        self.y_tick_input.setPlaceholderText("Auto")
+        y_tick_layout.addWidget(self.y_tick_input)
+        layout.addLayout(y_tick_layout)
+        
+        # === Sekundäre Y-Achse (Y2) ===
+        self.y2_enabled = QCheckBox("Sekundäre Y-Achse (Y2) aktivieren")
+        self.y2_enabled.setToolTip("Aktiviert eine zweite Y-Achse auf der rechten Seite.")
+        self.y2_enabled.stateChanged.connect(self.toggle_y2_settings)
+        layout.addWidget(self.y2_enabled)
+        
+        # Y2-Achsen Einstellungen (anfangs versteckt)
+        self.y2_group = QGroupBox("Y2-Achse Einstellungen")
+        y2_layout = QVBoxLayout()
+        
+        # Y2 Min/Max
+        y2_min_layout = QHBoxLayout()
+        y2_min_layout.addWidget(QLabel("Y2 Min:"))
+        self.y2_min_input = QLineEdit()
+        self.y2_min_input.setPlaceholderText("Auto")
+        y2_min_layout.addWidget(self.y2_min_input)
+        y2_layout.addLayout(y2_min_layout)
+        
+        y2_max_layout = QHBoxLayout()
+        y2_max_layout.addWidget(QLabel("Y2 Max:"))
+        self.y2_max_input = QLineEdit()
+        self.y2_max_input.setPlaceholderText("Auto")
+        y2_max_layout.addWidget(self.y2_max_input)
+        y2_layout.addLayout(y2_max_layout)
+        
+        # Y2 Label und Einheit
+        y2_layout.addWidget(QLabel("Y2-Achsen Label:"))
+        self.y2_label_input = QLineEdit()
+        self.y2_label_input.setPlaceholderText("z.B. Temperatur")
+        y2_layout.addWidget(self.y2_label_input)
+        
+        y2_layout.addWidget(QLabel("Y2-Achsen Einheit:"))
+        self.y2_unit_input = QLineEdit()
+        self.y2_unit_input.setPlaceholderText("z.B. °C, K")
+        y2_layout.addWidget(self.y2_unit_input)
+        
+        # Y2 Skalierung
+        y2_scale_layout = QHBoxLayout()
+        y2_scale_layout.addWidget(QLabel("Y2 Skalierung:"))
+        self.y2_scale_combo = QComboBox()
+        self.y2_scale_combo.addItems(list(self.SI_PREFIXES.keys()))
+        self.y2_scale_combo.setCurrentText('1')
+        y2_scale_layout.addWidget(self.y2_scale_combo)
+        y2_layout.addLayout(y2_scale_layout)
+        
+        # Y2 Tick
+        y2_tick_layout = QHBoxLayout()
+        y2_tick_layout.addWidget(QLabel("Y2-Tick Abstand:"))
+        self.y2_tick_input = QLineEdit()
+        self.y2_tick_input.setPlaceholderText("Auto")
+        y2_tick_layout.addWidget(self.y2_tick_input)
+        y2_layout.addLayout(y2_tick_layout)
+        
+        self.y2_group.setLayout(y2_layout)
+        self.y2_group.setVisible(False)
+        layout.addWidget(self.y2_group)
+        
         # Tick-Rate Einstellungen
         layout.addWidget(QLabel("Tick-Rate (Markierungen):"))
         
@@ -228,13 +296,6 @@ class GraphPlotter(QMainWindow):
         self.x_tick_input.setPlaceholderText("Auto")
         x_tick_layout.addWidget(self.x_tick_input)
         layout.addLayout(x_tick_layout)
-        
-        y_tick_layout = QHBoxLayout()
-        y_tick_layout.addWidget(QLabel("Y-Tick Abstand:"))
-        self.y_tick_input = QLineEdit()
-        self.y_tick_input.setPlaceholderText("Auto")
-        y_tick_layout.addWidget(self.y_tick_input)
-        layout.addLayout(y_tick_layout)
         
         # Schriftgröße Einstellungen
         layout.addWidget(QLabel("Schriftgrößen:"))
@@ -398,8 +459,25 @@ class GraphPlotter(QMainWindow):
         if current_row >= 0:
             self.file_list.takeItem(current_row)
             del self.datasets[current_row]
+            # Achsenzuordnung entfernen
+            if current_row in self.axis_assignments:
+                del self.axis_assignments[current_row]
+            # Achsenzuordnungen neu nummerieren
+            new_assignments = {}
+            for old_idx, axis in list(self.axis_assignments.items()):
+                if old_idx > current_row:
+                    new_assignments[old_idx - 1] = axis
+                else:
+                    new_assignments[old_idx] = axis
+            self.axis_assignments = new_assignments
             # Legendenfelder aktualisieren
             self.update_legend_fields()
+    
+    def toggle_y2_settings(self, state):
+        """Ein-/Ausblenden der sekundären Y-Achsen-Einstellungen"""
+        self.y2_group.setVisible(state == Qt.Checked)
+        # Legendenfelder aktualisieren um Achsenzuordnung anzuzeigen/verstecken
+        self.update_legend_fields()
     
     def load_file_statistics(self, file_path):
         """Lade eine CSV-Datei im Statistik-Modus.
@@ -527,14 +605,17 @@ class GraphPlotter(QMainWindow):
         # Custom Labels zurücksetzen
         self.custom_labels = {}
         
+        # Achsenzuordnung-Combos zurücksetzten
+        self.axis_combos = {}
+        
         # Neue Eingabefelder für jeden Datensatz erstellen
         for idx, dataset in enumerate(self.datasets):
             label_layout = QHBoxLayout()
             label_layout.setContentsMargins(0, 0, 0, 0)
             
             # Label mit Datensatznummer
-            label = QLabel(f"Graph {idx + 1}:")
-            label.setMaximumWidth(60)
+            label = QLabel(f"G{idx + 1}:")
+            label.setMaximumWidth(30)
             label_layout.addWidget(label)
             
             # Eingabefeld mit Platzhalter (Original-Label)
@@ -543,10 +624,28 @@ class GraphPlotter(QMainWindow):
             self.custom_labels[idx] = line_edit
             label_layout.addWidget(line_edit)
             
+            # Achsenzuordnung nur wenn Y2 aktiviert
+            if self.y2_enabled.isChecked():
+                axis_combo = QComboBox()
+                axis_combo.addItems(['Y1', 'Y2'])
+                axis_combo.setMaximumWidth(45)
+                # Vorherige Auswahl wiederherstellen
+                if idx in self.axis_assignments:
+                    axis_combo.setCurrentText(self.axis_assignments[idx])
+                else:
+                    self.axis_assignments[idx] = 'Y1'
+                axis_combo.currentTextChanged.connect(lambda text, i=idx: self.on_axis_changed(i, text))
+                self.axis_combos[idx] = axis_combo
+                label_layout.addWidget(axis_combo)
+            
             self.legend_layout.addLayout(label_layout)
         
         # Stretch am Ende hinzufügen, um die Felder nach oben zu drücken
         self.legend_layout.addStretch()
+    
+    def on_axis_changed(self, idx, axis):
+        """Speichere die Achsenzuordnung wenn geändert"""
+        self.axis_assignments[idx] = axis
     
     def get_axis_limits(self):
         """Ermittle die Achsen-Grenzen (in der gewählten Skalierung)"""
@@ -623,21 +722,40 @@ class GraphPlotter(QMainWindow):
             x_scale_factor = 1.0 / self.SI_PREFIXES[self.x_scale_combo.currentText()]
             y_scale_factor = 1.0 / self.SI_PREFIXES[self.y_scale_combo.currentText()]
             
+            # Y2-Skalierungsfaktor und Grenzen
+            y2_enabled = self.y2_enabled.isChecked()
+            y2_scale_factor = 1.0 / self.SI_PREFIXES[self.y2_scale_combo.currentText()] if y2_enabled else 1.0
+            
             # Plot erstellen
             self.fig.clear()
             ax = self.fig.add_subplot(111)
+            ax2 = None
+            
+            # Zweite Y-Achse erstellen wenn aktiviert
+            if y2_enabled:
+                ax2 = ax.twinx()
             
             # Alle Datensätze zeichnen
             any_data_plotted = False
+            lines_ax1 = []
+            labels_ax1 = []
+            lines_ax2 = []
+            labels_ax2 = []
             
             # Transparenz basierend auf Anzahl der Graphen
             num_datasets = len(self.datasets)
             line_alpha = 0.7 if num_datasets > 1 else 1.0
+            marker_alpha = line_alpha  # Gleiche Transparenz für Marker
             
             for idx, dataset in enumerate(self.datasets):
+                # Bestimme welche Achse verwendet wird
+                use_y2 = y2_enabled and self.axis_assignments.get(idx, 'Y1') == 'Y2'
+                current_ax = ax2 if use_y2 else ax
+                current_scale = y2_scale_factor if use_y2 else y_scale_factor
+                
                 # Skaliere die Daten
                 scaled_time = np.array([t * x_scale_factor for t in dataset['time']])
-                scaled_values = np.array([v * y_scale_factor for v in dataset['values']])
+                scaled_values = np.array([v * current_scale for v in dataset['values']])
                 
                 # Benutzerdefinierten Label verwenden, falls vorhanden
                 custom_label = ""
@@ -653,7 +771,7 @@ class GraphPlotter(QMainWindow):
                 # Prüfe ob Statistik-Datensatz (mit Standardabweichung)
                 if dataset.get('is_statistics') and 'std' in dataset:
                     # Statistik-Modus: Zeichne Mittelwert mit Fehlerband
-                    scaled_std = np.array([s * y_scale_factor for s in dataset['std']])
+                    scaled_std = np.array([s * current_scale for s in dataset['std']])
                     
                     # Filter nach X-Grenzen (Y-Grenzen werden durch ylim gehandhabt)
                     mask = (scaled_time >= x_min) & (scaled_time <= x_max)
@@ -663,30 +781,44 @@ class GraphPlotter(QMainWindow):
                     
                     if len(filtered_time) > 0:
                         # Fehlerband (Standardabweichung) zeichnen
-                        ax.fill_between(filtered_time, 
+                        current_ax.fill_between(filtered_time, 
                                         filtered_values - filtered_std,
                                         filtered_values + filtered_std, 
-                                        alpha=0.3, color=color, 
-                                        label=f'{label} ± σ')
+                                        alpha=0.3 * marker_alpha, color=color)
                         
                         # Mittelwert-Linie zeichnen
-                        ax.plot(filtered_time, filtered_values, color=color, 
-                                linewidth=2, marker='', label=f'{label} (Mittelwert)', alpha=line_alpha)
+                        line, = current_ax.plot(filtered_time, filtered_values, color=color, 
+                                linewidth=2, marker='', alpha=line_alpha)
+                        
+                        # Für Legende sammeln
+                        if use_y2:
+                            lines_ax2.append(line)
+                            labels_ax2.append(f'{label} (Y2)')
+                        else:
+                            lines_ax1.append(line)
+                            labels_ax1.append(f'{label} (Mittelwert)')
                         any_data_plotted = True
                 else:
                     # Standard-Modus: Normale Darstellung
-                    # Filtere Datenpunkte nach Grenzen
-                    filtered_time = []
-                    filtered_values = []
+                    # Filtere Datenpunkte nach X-Grenzen
+                    mask = (scaled_time >= x_min) & (scaled_time <= x_max)
+                    filtered_time = scaled_time[mask]
+                    filtered_values = scaled_values[mask]
                     
-                    for t, v in zip(scaled_time, scaled_values):
-                        if x_min <= t <= x_max and y_min <= v <= y_max:
-                            filtered_time.append(t)
-                            filtered_values.append(v)
-                    
-                    if filtered_time:
-                        ax.plot(filtered_time, filtered_values, color=color, marker='o', 
-                                linewidth=2, markersize=4, label=label, alpha=line_alpha)
+                    if len(filtered_time) > 0:
+                        # Plot mit Transparenz für Linie UND Marker
+                        line, = current_ax.plot(filtered_time, filtered_values, color=color, marker='o', 
+                                linewidth=2, markersize=4, alpha=line_alpha,
+                                markerfacecolor=(*matplotlib.colors.to_rgb(color), marker_alpha),
+                                markeredgecolor=(*matplotlib.colors.to_rgb(color), marker_alpha))
+                        
+                        # Für Legende sammeln
+                        if use_y2:
+                            lines_ax2.append(line)
+                            labels_ax2.append(f'{label} (Y2)')
+                        else:
+                            lines_ax1.append(line)
+                            labels_ax1.append(label)
                         any_data_plotted = True
             
             if not any_data_plotted:
@@ -708,7 +840,7 @@ class GraphPlotter(QMainWindow):
             x_label = self.x_label_input.text() or "Zeit"
             ax.set_xlabel(x_label, fontsize=label_fontsize, fontweight='bold')
             
-            # Y-Label mit Einheit
+            # Y-Label mit Einheit (primäre Achse)
             y_label = self.y_label_input.text() or "Wert"
             y_unit = self.y_unit_input.text()
             
@@ -717,12 +849,39 @@ class GraphPlotter(QMainWindow):
             
             ax.set_ylabel(y_label, fontsize=label_fontsize, fontweight='bold')
             
+            # Y2-Label mit Einheit (sekundäre Achse)
+            if y2_enabled and ax2:
+                y2_label = self.y2_label_input.text() or "Wert 2"
+                y2_unit = self.y2_unit_input.text()
+                
+                if y2_unit:
+                    y2_label = f"{y2_label} ({y2_unit})"
+                
+                ax2.set_ylabel(y2_label, fontsize=label_fontsize, fontweight='bold')
+                ax2.tick_params(axis='y', which='major', labelsize=tick_fontsize)
+            
             # Schriftgröße der Tick-Label setzen
             ax.tick_params(axis='both', which='major', labelsize=tick_fontsize)
             
             ax.set_xlim(x_min, x_max)
             ax.set_ylim(y_min, y_max)
             ax.grid(True, alpha=0.3)
+            
+            # Y2-Grenzen setzen
+            if y2_enabled and ax2:
+                try:
+                    y2_min = float(self.y2_min_input.text()) if self.y2_min_input.text() else None
+                except ValueError:
+                    y2_min = None
+                try:
+                    y2_max = float(self.y2_max_input.text()) if self.y2_max_input.text() else None
+                except ValueError:
+                    y2_max = None
+                
+                if y2_min is not None or y2_max is not None:
+                    current_y2_min, current_y2_max = ax2.get_ylim()
+                    ax2.set_ylim(y2_min if y2_min is not None else current_y2_min,
+                                 y2_max if y2_max is not None else current_y2_max)
             
             # Tick-Locator setzen
             from matplotlib.ticker import MultipleLocator, AutoMinorLocator
@@ -746,10 +905,24 @@ class GraphPlotter(QMainWindow):
             if y_tick is not None and y_tick > 0:
                 ax.yaxis.set_major_locator(MultipleLocator(y_tick))
             
+            # Y2-Tick setzen
+            if y2_enabled and ax2:
+                try:
+                    y2_tick = float(self.y2_tick_input.text()) if self.y2_tick_input.text() else None
+                except ValueError:
+                    y2_tick = None
+                
+                if y2_tick is not None and y2_tick > 0:
+                    ax2.yaxis.set_major_locator(MultipleLocator(y2_tick))
+            
             # Legende hinzufügen wenn mehrere Datensätze oder Statistik-Modus
             has_statistics = any(d.get('is_statistics') for d in self.datasets)
-            if len(self.datasets) > 1 or has_statistics:
-                ax.legend(loc='best', fontsize=label_fontsize-2)
+            if len(self.datasets) > 1 or has_statistics or y2_enabled:
+                # Kombiniere Legenden von beiden Achsen
+                all_lines = lines_ax1 + lines_ax2
+                all_labels = labels_ax1 + labels_ax2
+                if all_lines:
+                    ax.legend(all_lines, all_labels, loc='best', fontsize=label_fontsize-2)
             
             self.fig.tight_layout()
             self.canvas.draw()

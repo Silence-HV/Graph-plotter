@@ -32,6 +32,7 @@ pyinstaller_cmd = [
     "--windowed",  # Keine Konsole
     "--icon=NONE",  # Kein Icon (optional)
     "--hidden-import=matplotlib.backends.backend_qt5agg",
+    "--hidden-import=matplotlib.backends.backend_pdf",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
     "--hidden-import=PyQt5.sip",
