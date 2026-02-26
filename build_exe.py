@@ -7,11 +7,9 @@ Erstellt eine standalone .exe-Datei mit allen Dependencies
 import os
 import sys
 import subprocess
+import re
 from pathlib import Path
 from datetime import datetime
-
-# Versionsnummer
-VERSION = "1.1"
 
 # Pfade definieren
 project_dir = Path(__file__).parent
@@ -19,15 +17,30 @@ main_file = project_dir / "Plotter.py"
 dist_dir = project_dir / "dist"
 build_dir = project_dir / "build"
 
+# Version aus Plotter.py auslesen
+def get_version():
+    with open(main_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    match = re.search(r'VERSION\s*=\s*["\'](\d+\.\d+)["\']', content)
+    if match:
+        return match.group(1)
+    return "1.0"
+
+VERSION = get_version()
+VERSION_SHORT = VERSION.replace(".", "")  # 1.4 -> 14
+
 print("=" * 60)
 print(f"Graph Plotter - .exe Erstellung (v{VERSION})")
 print(f"Zeitstempel: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print("=" * 60)
 
+# Dateiname mit Versionsnummer
+exe_name = f"GraphPlotter_v{VERSION_SHORT}"
+
 # PyInstaller Befehl zusammenstellen
 pyinstaller_cmd = [
     sys.executable, "-m", "PyInstaller",
-    "--name=GraphPlotter",
+    f"--name={exe_name}",
     "--onefile",  # Einzelne .exe statt Ordner
     "--windowed",  # Keine Konsole
     "--icon=NONE",  # Kein Icon (optional)
@@ -35,7 +48,6 @@ pyinstaller_cmd = [
     "--hidden-import=matplotlib.backends.backend_pdf",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
-    "--hidden-import=PyQt5.sip",
     "--clean",  # Alten Build löschen
     str(main_file)
 ]
@@ -51,7 +63,7 @@ try:
     print("[OK] Erstellung erfolgreich!")
     print("=" * 60)
     
-    exe_path = dist_dir / "GraphPlotter.exe"
+    exe_path = dist_dir / f"{exe_name}.exe"
     
     if exe_path.exists():
         file_size_mb = exe_path.stat().st_size / (1024 * 1024)

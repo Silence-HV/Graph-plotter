@@ -13,11 +13,12 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.3"
+VERSION = "1.4"
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import numpy as np
 
 
@@ -100,10 +101,20 @@ class GraphPlotter(QMainWindow):
         left_panel = self.create_control_panel()
         main_layout.addWidget(left_panel)
         
-        # Rechte Seite - Plot
+        # Rechte Seite - Plot mit Toolbar
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.fig = Figure(figsize=(8, 6), dpi=100)
         self.canvas = FigureCanvas(self.fig)
-        main_layout.addWidget(self.canvas, 1)
+        
+        # Navigation-Toolbar für Zoom-Funktionen
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        right_layout.addWidget(self.toolbar)
+        right_layout.addWidget(self.canvas, 1)
+        
+        main_layout.addWidget(right_panel, 1)
         
         main_widget.setLayout(main_layout)
         
@@ -317,6 +328,21 @@ class GraphPlotter(QMainWindow):
         tick_size_layout.addWidget(self.tick_size_input)
         tick_size_layout.addStretch()
         layout.addLayout(tick_size_layout)
+        
+        legend_size_layout = QHBoxLayout()
+        legend_size_layout.addWidget(QLabel("Legende (pt):"))
+        self.legend_size_input = QLineEdit()
+        self.legend_size_input.setText("10")
+        self.legend_size_input.setMaximumWidth(60)
+        legend_size_layout.addWidget(self.legend_size_input)
+        legend_size_layout.addStretch()
+        layout.addLayout(legend_size_layout)
+        
+        # Legende Position
+        self.legend_top_right = QCheckBox("Legende oben rechts verankern")
+        self.legend_top_right.setToolTip("Wenn aktiviert, wird die Legende immer oben rechts positioniert")
+        layout.addWidget(self.legend_top_right)
+        
         # Plot Button
         plot_button = QPushButton("Plot erstellen")
         plot_button.setFont(QFont("Arial", 12, QFont.Bold))
@@ -780,23 +806,26 @@ class GraphPlotter(QMainWindow):
                     filtered_std = scaled_std[mask]
                     
                     if len(filtered_time) > 0:
+                        # Label für Legende vorbereiten
+                        legend_label = f'{label} (Y2)' if use_y2 else f'{label} (Mittelwert)'
+                        
                         # Fehlerband (Standardabweichung) zeichnen
                         current_ax.fill_between(filtered_time, 
                                         filtered_values - filtered_std,
                                         filtered_values + filtered_std, 
                                         alpha=0.3 * marker_alpha, color=color)
                         
-                        # Mittelwert-Linie zeichnen
+                        # Mittelwert-Linie zeichnen mit Label für automatische Legende
                         line, = current_ax.plot(filtered_time, filtered_values, color=color, 
-                                linewidth=2, marker='', alpha=line_alpha)
+                                linewidth=2, marker='', alpha=line_alpha, label=legend_label)
                         
                         # Für Legende sammeln
                         if use_y2:
                             lines_ax2.append(line)
-                            labels_ax2.append(f'{label} (Y2)')
+                            labels_ax2.append(legend_label)
                         else:
                             lines_ax1.append(line)
-                            labels_ax1.append(f'{label} (Mittelwert)')
+                            labels_ax1.append(legend_label)
                         any_data_plotted = True
                 else:
                     # Standard-Modus: Normale Darstellung
@@ -806,19 +835,23 @@ class GraphPlotter(QMainWindow):
                     filtered_values = scaled_values[mask]
                     
                     if len(filtered_time) > 0:
-                        # Plot mit Transparenz für Linie UND Marker
+                        # Label für Legende vorbereiten
+                        legend_label = f'{label} (Y2)' if use_y2 else label
+                        
+                        # Plot mit Transparenz für Linie UND Marker, mit Label für automatische Legende
                         line, = current_ax.plot(filtered_time, filtered_values, color=color, marker='o', 
                                 linewidth=2, markersize=4, alpha=line_alpha,
                                 markerfacecolor=(*matplotlib.colors.to_rgb(color), marker_alpha),
-                                markeredgecolor=(*matplotlib.colors.to_rgb(color), marker_alpha))
+                                markeredgecolor=(*matplotlib.colors.to_rgb(color), marker_alpha),
+                                label=legend_label)
                         
                         # Für Legende sammeln
                         if use_y2:
                             lines_ax2.append(line)
-                            labels_ax2.append(f'{label} (Y2)')
+                            labels_ax2.append(legend_label)
                         else:
                             lines_ax1.append(line)
-                            labels_ax1.append(label)
+                            labels_ax1.append(legend_label)
                         any_data_plotted = True
             
             if not any_data_plotted:
@@ -915,6 +948,19 @@ class GraphPlotter(QMainWindow):
                 if y2_tick is not None and y2_tick > 0:
                     ax2.yaxis.set_major_locator(MultipleLocator(y2_tick))
             
+            # Legenden-Schriftgröße abrufen
+            try:
+                legend_fontsize = int(self.legend_size_input.text())
+            except ValueError:
+                legend_fontsize = 10
+            
+            # Legenden-Position bestimmen
+            legend_loc = 'upper right' if self.legend_top_right.isChecked() else 'best'
+            
+            # rcParams für automatische Legende (Toolbar) setzen
+            matplotlib.rcParams['legend.fontsize'] = legend_fontsize
+            matplotlib.rcParams['legend.loc'] = legend_loc
+            
             # Legende hinzufügen wenn mehrere Datensätze oder Statistik-Modus
             has_statistics = any(d.get('is_statistics') for d in self.datasets)
             if len(self.datasets) > 1 or has_statistics or y2_enabled:
@@ -922,7 +968,7 @@ class GraphPlotter(QMainWindow):
                 all_lines = lines_ax1 + lines_ax2
                 all_labels = labels_ax1 + labels_ax2
                 if all_lines:
-                    ax.legend(all_lines, all_labels, loc='best', fontsize=label_fontsize-2)
+                    ax.legend(all_lines, all_labels, loc=legend_loc, fontsize=legend_fontsize)
             
             self.fig.tight_layout()
             self.canvas.draw()
