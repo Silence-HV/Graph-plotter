@@ -44,10 +44,15 @@ pyinstaller_cmd = [
     "--onefile",  # Einzelne .exe statt Ordner
     "--windowed",  # Keine Konsole
     "--icon=NONE",  # Kein Icon (optional)
+    "--collect-all=PyQt5",  # Alle PyQt5-Module und Binaries sammeln
+    "--collect-all=PyQt5.sip",  # sip-Modul sammeln
+    "--hidden-import=PyQt5.sip",
+    "--hidden-import=sip",
     "--hidden-import=matplotlib.backends.backend_qt5agg",
     "--hidden-import=matplotlib.backends.backend_pdf",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
+    "--noconfirm",  # Alte Builds überschreiben ohne Nachfrage
     "--clean",  # Alten Build löschen
     str(main_file)
 ]
