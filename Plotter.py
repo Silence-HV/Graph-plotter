@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QSpinBox, QDoubleSpinBox,
     QCheckBox, QMessageBox, QGroupBox, QComboBox, QListWidget, QListWidgetItem,
-    QScrollArea
+    QScrollArea, QColorDialog
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -13,7 +13,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.4"
+VERSION = "1.5"
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -162,8 +162,9 @@ class GraphPlotter(QMainWindow):
         self.legend_scroll.setWidget(self.legend_scroll_widget)
         layout.addWidget(self.legend_scroll)
         
-        # Dictionary zum Speichern der Custom-Labels
+        # Dictionary zum Speichern der Custom-Labels und Farben
         self.custom_labels = {}  # {index: QLineEdit}
+        self.custom_colors = {}  # {index: str (hex color)}
         
         # X-Achsen Grenzen
         layout.addWidget(QLabel("X-Achse (Zeit):"))
@@ -298,6 +299,14 @@ class GraphPlotter(QMainWindow):
         self.y2_group.setVisible(False)
         layout.addWidget(self.y2_group)
         
+        # Warnhinweis für Y2-Modus
+        self.y2_warning_label = QLabel("⚠ Hinweis: Bei aktivierter Y2-Achse bitte keine Graphen-\n"
+                                        "Bearbeitung über die Toolbar verwenden (Legenden-Fehler).")
+        self.y2_warning_label.setStyleSheet("color: #cc7700; font-size: 9pt; padding: 4px;")
+        self.y2_warning_label.setWordWrap(True)
+        self.y2_warning_label.setVisible(False)
+        layout.addWidget(self.y2_warning_label)
+        
         # Tick-Rate Einstellungen
         layout.addWidget(QLabel("Tick-Rate (Markierungen):"))
         
@@ -314,7 +323,7 @@ class GraphPlotter(QMainWindow):
         label_size_layout = QHBoxLayout()
         label_size_layout.addWidget(QLabel("Achsen-Label (pt):"))
         self.label_size_input = QLineEdit()
-        self.label_size_input.setText("12")
+        self.label_size_input.setText("30")
         self.label_size_input.setMaximumWidth(60)
         label_size_layout.addWidget(self.label_size_input)
         label_size_layout.addStretch()
@@ -323,7 +332,7 @@ class GraphPlotter(QMainWindow):
         tick_size_layout = QHBoxLayout()
         tick_size_layout.addWidget(QLabel("Achsen-Ticks (pt):"))
         self.tick_size_input = QLineEdit()
-        self.tick_size_input.setText("10")
+        self.tick_size_input.setText("24")
         self.tick_size_input.setMaximumWidth(60)
         tick_size_layout.addWidget(self.tick_size_input)
         tick_size_layout.addStretch()
@@ -332,7 +341,7 @@ class GraphPlotter(QMainWindow):
         legend_size_layout = QHBoxLayout()
         legend_size_layout.addWidget(QLabel("Legende (pt):"))
         self.legend_size_input = QLineEdit()
-        self.legend_size_input.setText("10")
+        self.legend_size_input.setText("30")
         self.legend_size_input.setMaximumWidth(60)
         legend_size_layout.addWidget(self.legend_size_input)
         legend_size_layout.addStretch()
@@ -501,7 +510,9 @@ class GraphPlotter(QMainWindow):
     
     def toggle_y2_settings(self, state):
         """Ein-/Ausblenden der sekundären Y-Achsen-Einstellungen"""
-        self.y2_group.setVisible(state == Qt.Checked)
+        is_visible = state == Qt.Checked
+        self.y2_group.setVisible(is_visible)
+        self.y2_warning_label.setVisible(is_visible)
         # Legendenfelder aktualisieren um Achsenzuordnung anzuzeigen/verstecken
         self.update_legend_fields()
     
@@ -628,16 +639,32 @@ class GraphPlotter(QMainWindow):
                     if subchild.widget():
                         subchild.widget().deleteLater()
         
-        # Custom Labels zurücksetzen
+        # Custom Labels zurücksetzen (Farben beibehalten wenn möglich)
         self.custom_labels = {}
         
         # Achsenzuordnung-Combos zurücksetzten
         self.axis_combos = {}
         
+        # Farbbuttons Dictionary
+        self.color_buttons = {}
+        
         # Neue Eingabefelder für jeden Datensatz erstellen
         for idx, dataset in enumerate(self.datasets):
             label_layout = QHBoxLayout()
             label_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Farbbutton - Standardfarbe oder benutzerdefinierte Farbe verwenden
+            default_color = self.COLORS[idx % len(self.COLORS)]
+            current_color = self.custom_colors.get(idx, default_color)
+            
+            color_btn = QPushButton()
+            color_btn.setMaximumWidth(24)
+            color_btn.setMaximumHeight(24)
+            color_btn.setStyleSheet(f"background-color: {current_color}; border: 1px solid #555;")
+            color_btn.setToolTip("Farbe ändern")
+            color_btn.clicked.connect(lambda checked, i=idx: self.change_color(i))
+            self.color_buttons[idx] = color_btn
+            label_layout.addWidget(color_btn)
             
             # Label mit Datensatznummer
             label = QLabel(f"G{idx + 1}:")
@@ -672,6 +699,24 @@ class GraphPlotter(QMainWindow):
     def on_axis_changed(self, idx, axis):
         """Speichere die Achsenzuordnung wenn geändert"""
         self.axis_assignments[idx] = axis
+    
+    def change_color(self, idx):
+        """Farbe für einen Datensatz ändern"""
+        # Aktuelle Farbe ermitteln
+        default_color = self.COLORS[idx % len(self.COLORS)]
+        current_color = self.custom_colors.get(idx, default_color)
+        
+        # Farbdialog öffnen
+        from PyQt5.QtGui import QColor
+        color = QColorDialog.getColor(QColor(current_color), self, "Farbe auswählen")
+        
+        if color.isValid():
+            hex_color = color.name()  # z.B. "#ff0000"
+            self.custom_colors[idx] = hex_color
+            
+            # Button-Farbe aktualisieren
+            if idx in self.color_buttons:
+                self.color_buttons[idx].setStyleSheet(f"background-color: {hex_color}; border: 1px solid #555;")
     
     def get_axis_limits(self):
         """Ermittle die Achsen-Grenzen (in der gewählten Skalierung)"""
@@ -791,8 +836,9 @@ class GraphPlotter(QMainWindow):
                 # Label: Custom oder Original
                 label = custom_label if custom_label else dataset['label']
                 
-                # Farbe basierend auf Index
-                color = self.COLORS[idx % len(self.COLORS)]
+                # Farbe: Benutzerdefiniert oder Standard basierend auf Index
+                default_color = self.COLORS[idx % len(self.COLORS)]
+                color = self.custom_colors.get(idx, default_color)
                 
                 # Prüfe ob Statistik-Datensatz (mit Standardabweichung)
                 if dataset.get('is_statistics') and 'std' in dataset:
@@ -815,7 +861,7 @@ class GraphPlotter(QMainWindow):
                                         filtered_values + filtered_std, 
                                         alpha=0.3 * marker_alpha, color=color)
                         
-                        # Mittelwert-Linie zeichnen mit Label für automatische Legende
+                        # Mittelwert-Linie zeichnen mit Label für Toolbar-Bearbeitung
                         line, = current_ax.plot(filtered_time, filtered_values, color=color, 
                                 linewidth=2, marker='', alpha=line_alpha, label=legend_label)
                         
@@ -838,7 +884,7 @@ class GraphPlotter(QMainWindow):
                         # Label für Legende vorbereiten
                         legend_label = f'{label} (Y2)' if use_y2 else label
                         
-                        # Plot mit Transparenz für Linie UND Marker, mit Label für automatische Legende
+                        # Plot mit Transparenz für Linie UND Marker, mit Label für Toolbar-Bearbeitung
                         line, = current_ax.plot(filtered_time, filtered_values, color=color, marker='o', 
                                 linewidth=2, markersize=4, alpha=line_alpha,
                                 markerfacecolor=(*matplotlib.colors.to_rgb(color), marker_alpha),
@@ -878,7 +924,7 @@ class GraphPlotter(QMainWindow):
             y_unit = self.y_unit_input.text()
             
             if y_unit:
-                y_label = f"{y_label} ({y_unit})"
+                y_label = f"{y_label} [{y_unit}]"
             
             ax.set_ylabel(y_label, fontsize=label_fontsize, fontweight='bold')
             
@@ -888,7 +934,7 @@ class GraphPlotter(QMainWindow):
                 y2_unit = self.y2_unit_input.text()
                 
                 if y2_unit:
-                    y2_label = f"{y2_label} ({y2_unit})"
+                    y2_label = f"{y2_label} [{y2_unit}]"
                 
                 ax2.set_ylabel(y2_label, fontsize=label_fontsize, fontweight='bold')
                 ax2.tick_params(axis='y', which='major', labelsize=tick_fontsize)
