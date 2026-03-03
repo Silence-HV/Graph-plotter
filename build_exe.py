@@ -50,6 +50,7 @@ pyinstaller_cmd = [
     "--hidden-import=sip",
     "--hidden-import=matplotlib.backends.backend_qt5agg",
     "--hidden-import=matplotlib.backends.backend_pdf",
+    "--hidden-import=matplotlib.backends.backend_svg",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
     "--noconfirm",  # Alte Builds überschreiben ohne Nachfrage
