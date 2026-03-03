@@ -1095,13 +1095,27 @@ class GraphPlotter(QMainWindow):
                 self.fig.savefig(file_path, format='jpeg', dpi=300, bbox_inches='tight',
                                  pil_kwargs={'optimize': True, 'quality': 95})
             elif file_ext == 'svg':
-                # SVG kompakt: metadata entfernen für kleinere Dateien
-                self.fig.savefig(file_path, format='svg', bbox_inches='tight',
+                # SVG: Datenlinien rasterisieren um Dateigröße zu reduzieren
+                # Achsen und Text bleiben als Vektoren erhalten
+                for ax in self.fig.get_axes():
+                    for line in ax.get_lines():
+                        line.set_rasterized(True)
+                self.fig.savefig(file_path, format='svg', dpi=300, bbox_inches='tight',
                                  metadata={'Creator': None, 'Date': None, 'Format': None, 'Type': None})
+                # Rasterisierung zurücksetzen für weitere Bearbeitung
+                for ax in self.fig.get_axes():
+                    for line in ax.get_lines():
+                        line.set_rasterized(False)
             elif file_ext == 'svgz':
-                # SVGZ: komprimiertes SVG (gzip)
-                self.fig.savefig(file_path, format='svgz', bbox_inches='tight',
+                # SVGZ: komprimiertes SVG mit rasterisierten Datenlinien
+                for ax in self.fig.get_axes():
+                    for line in ax.get_lines():
+                        line.set_rasterized(True)
+                self.fig.savefig(file_path, format='svgz', dpi=300, bbox_inches='tight',
                                  metadata={'Creator': None, 'Date': None, 'Format': None, 'Type': None})
+                for ax in self.fig.get_axes():
+                    for line in ax.get_lines():
+                        line.set_rasterized(False)
             elif file_ext == 'tiff':
                 # TIFF mit LZW-Komprimierung
                 self.fig.savefig(file_path, format='tiff', dpi=300, bbox_inches='tight',
