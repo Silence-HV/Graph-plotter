@@ -13,7 +13,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.5"
+VERSION = "1.6"  # angepasste Export-Formate
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -938,9 +938,15 @@ class GraphPlotter(QMainWindow):
                 
                 ax2.set_ylabel(y2_label, fontsize=label_fontsize, fontweight='bold')
                 ax2.tick_params(axis='y', which='major', labelsize=tick_fontsize)
+                # Offset-Text (z.B. "1e6") Schriftgröße für sekundäre Achse
+                ax2.yaxis.get_offset_text().set_fontsize(tick_fontsize)
             
             # Schriftgröße der Tick-Label setzen
             ax.tick_params(axis='both', which='major', labelsize=tick_fontsize)
+            
+            # Offset-Text (z.B. "1e6", "1e-7") Schriftgröße für primäre Achsen
+            ax.xaxis.get_offset_text().set_fontsize(tick_fontsize)
+            ax.yaxis.get_offset_text().set_fontsize(tick_fontsize)
             
             ax.set_xlim(x_min, x_max)
             ax.set_ylim(y_min, y_max)
@@ -1038,6 +1044,10 @@ class GraphPlotter(QMainWindow):
                 "PNG - Hochauflösendes Raster (*.png);;"
                 "PDF - Rasterisiert (*.pdf);;"
                 "JPEG - Komprimiertes Raster (*.jpg);;"
+                "SVG - Kompaktes Vektor (*.svg);;"
+                "SVGZ - Komprimiertes SVG (*.svgz);;"
+                "TIFF - Tagged Image (*.tiff);;"
+                "WebP - Modernes Web-Format (*.webp);;"
                 "Alle Dateien (*)"
             )
             
@@ -1052,7 +1062,7 @@ class GraphPlotter(QMainWindow):
                 return
             
             # Dateiformat bestimmen
-            if not file_path.lower().endswith(('.pdf', '.png', '.jpg')):
+            if not file_path.lower().endswith(('.pdf', '.png', '.jpg', '.svg', '.svgz', '.tiff', '.webp')):
                 # Dateiendung basierend auf Filter hinzufügen
                 if 'PNG' in selected_filter:
                     file_path += '.png'
@@ -1060,6 +1070,14 @@ class GraphPlotter(QMainWindow):
                     file_path += '.pdf'
                 elif 'JPEG' in selected_filter:
                     file_path += '.jpg'
+                elif 'SVGZ' in selected_filter:
+                    file_path += '.svgz'
+                elif 'SVG' in selected_filter:
+                    file_path += '.svg'
+                elif 'TIFF' in selected_filter:
+                    file_path += '.tiff'
+                elif 'WebP' in selected_filter:
+                    file_path += '.webp'
             
             # Optimierte Speicheroptionen für verschiedene Formate
             file_ext = file_path.lower().split('.')[-1]
@@ -1076,6 +1094,22 @@ class GraphPlotter(QMainWindow):
                 # JPEG mit guter Qualität und Komprimierung
                 self.fig.savefig(file_path, format='jpeg', dpi=300, bbox_inches='tight',
                                  pil_kwargs={'optimize': True, 'quality': 95})
+            elif file_ext == 'svg':
+                # SVG kompakt: metadata entfernen für kleinere Dateien
+                self.fig.savefig(file_path, format='svg', bbox_inches='tight',
+                                 metadata={'Creator': None, 'Date': None, 'Format': None, 'Type': None})
+            elif file_ext == 'svgz':
+                # SVGZ: komprimiertes SVG (gzip)
+                self.fig.savefig(file_path, format='svgz', bbox_inches='tight',
+                                 metadata={'Creator': None, 'Date': None, 'Format': None, 'Type': None})
+            elif file_ext == 'tiff':
+                # TIFF mit LZW-Komprimierung
+                self.fig.savefig(file_path, format='tiff', dpi=300, bbox_inches='tight',
+                                 pil_kwargs={'compression': 'tiff_lzw'})
+            elif file_ext == 'webp':
+                # WebP mit hoher Qualität
+                self.fig.savefig(file_path, format='webp', dpi=300, bbox_inches='tight',
+                                 pil_kwargs={'quality': 95})
             else:
                 self.fig.savefig(file_path, bbox_inches='tight')
             
