@@ -1,6 +1,8 @@
 import sys
 import csv
+import re
 from pathlib import Path
+from openpyxl import load_workbook
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QSpinBox, QDoubleSpinBox,
@@ -13,7 +15,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.6"  # angepasste Export-Formate
+VERSION = "1.7"  # Excel-Import mit deutscher Zahlenformatierung
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -51,10 +53,14 @@ class DropableFileList(QListWidget):
             # Extrahiere Dateipfade
             for url in event.mimeData().urls():
                 file_path = url.toLocalFile()
-                # Nur CSV-Dateien laden
-                if file_path.lower().endswith('.csv'):
+                file_lower = file_path.lower()
+                # CSV- oder Excel-Dateien laden
+                if file_lower.endswith('.csv'):
                     if self.parent_window:
                         self.parent_window.load_file(file_path)
+                elif file_lower.endswith(('.xlsx', '.xls')):
+                    if self.parent_window:
+                        self.parent_window.load_excel_file(file_path)
         else:
             event.ignore()
 
@@ -133,11 +139,22 @@ class GraphPlotter(QMainWindow):
         layout.addWidget(self.statistics_mode)
         
         # Datei laden
-        layout.addWidget(QLabel("CSV-Dateien:"))
+        layout.addWidget(QLabel("Datendateien:"))
         file_layout = QHBoxLayout()
         self.file_button = QPushButton("CSV Datei laden")
         self.file_button.clicked.connect(lambda: self.load_file())
         file_layout.addWidget(self.file_button)
+        
+        self.excel_button = QPushButton("Excel laden (DE)")
+        self.excel_button.setToolTip(
+            "Lädt Excel-Dateien mit deutscher Zahlenformatierung:\n"
+            "• Komma als Dezimaltrenner (z.B. 3,14)\n"
+            "• E-Notation für Exponenten (z.B. 1,5E+9)\n"
+            "• Erste Spalte = X-Werte\n"
+            "• Folgende Spalten = Y-Werte für verschiedene Graphen"
+        )
+        self.excel_button.clicked.connect(lambda: self.load_excel_file())
+        file_layout.addWidget(self.excel_button)
         layout.addLayout(file_layout)
         
         # Liste geladener Dateien
@@ -599,6 +616,210 @@ class GraphPlotter(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Fehler beim Laden", f"Fehler: {str(e)}")
     
+    def parse_german_number(self, value):
+        """Konvertiere eine Zahl in deutscher Schreibweise zu float.
+        
+        Deutsche Schreibweise:
+        - Komma als Dezimaltrenner (z.B. "3,14")
+        - Punkt als optionaler Tausendertrenner (z.B. "1.000,50")
+        - E-Notation für Exponenten (z.B. "1,5E+9" oder "2,3E-6")
+        
+        Args:
+            value: Zellenwert (kann String, int, float oder None sein)
+            
+        Returns:
+            float: Der konvertierte Zahlwert
+            
+        Raises:
+            ValueError: Wenn die Konvertierung fehlschlägt
+        """
+        if value is None:
+            raise ValueError("Leerer Wert")
+        
+        # Wenn bereits eine Zahl, direkt zurückgeben
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        # In String konvertieren und Leerzeichen entfernen
+        text = str(value).strip()
+        
+        if not text:
+            raise ValueError("Leerer String")
+        
+        # Deutsche E-Notation normalisieren (z.B. "1,5E+9" -> "1.5E+9")
+        # Regex: Zahl mit Komma, gefolgt von E/e und optionalem +/- und Ziffern
+        pattern = r'([+-]?\d+(?:\.\d{3})*),(\d+)([Ee][+-]?\d+)?'
+        
+        def convert_match(match):
+            # Tausenderpunkte entfernen und Komma durch Punkt ersetzen
+            integer_part = match.group(1).replace('.', '')
+            decimal_part = match.group(2)
+            exponent = match.group(3) if match.group(3) else ''
+            return f"{integer_part}.{decimal_part}{exponent}"
+        
+        # Versuche deutsche Notation zu konvertieren
+        converted = re.sub(pattern, convert_match, text)
+        
+        # Falls kein Match, versuche einfache Komma-zu-Punkt Konvertierung
+        if converted == text and ',' in text:
+            # Entferne Tausenderpunkte und ersetze Dezimalkomma
+            converted = text.replace('.', '').replace(',', '.')
+        
+        try:
+            return float(converted)
+        except ValueError:
+            raise ValueError(f"Kann '{value}' nicht als Zahl interpretieren")
+    
+    def load_excel_file(self, file_path=None):
+        """Lade eine Excel-Datei mit deutscher Zahlenformatierung.
+        
+        Die Datei wird spaltenweise ausgewertet:
+        - Erste Spalte: X-Achsen Werte
+        - Folgende Spalten: Y-Werte für verschiedene Graphen
+        
+        Deutsche Zahlenformatierung wird unterstützt:
+        - Komma als Dezimaltrenner
+        - E-Notation für Exponenten (z.B. 1,5E+9)
+        
+        Args:
+            file_path: Optionaler Dateipfad. Wenn None, wird ein Dialog angezeigt.
+        """
+        # Wenn kein Dateipfad gegeben, Dialog öffnen
+        if file_path is None:
+            dialog = QFileDialog(self)
+            dialog.setWindowTitle("Excel Datei laden (Deutsche Formatierung)")
+            dialog.setFileMode(QFileDialog.ExistingFile)
+            dialog.setDefaultSuffix("xlsx")
+            dialog.setNameFilters(["Excel Dateien (*.xlsx *.xls)", "Alle Dateien (*)"])
+            
+            if dialog.exec_() == QFileDialog.Accepted:
+                files = dialog.selectedFiles()
+                if files and len(files) > 0:
+                    file_path = files[0]
+                else:
+                    return
+            else:
+                return
+        
+        # Überprüfe, dass file_path gültig ist
+        if not file_path:
+            return
+        
+        try:
+            # Excel-Datei öffnen
+            wb = load_workbook(filename=file_path, data_only=True)
+            ws = wb.active
+            
+            # Daten aus der Tabelle lesen
+            rows = list(ws.iter_rows(values_only=True))
+            
+            if len(rows) < 2:
+                QMessageBox.warning(self, "Fehler", "Excel-Datei enthält zu wenig Daten!")
+                wb.close()
+                return
+            
+            # Erste Zeile als Header verwenden
+            headers = rows[0]
+            data_rows = rows[1:]
+            
+            # Anzahl der Spalten ermitteln (ohne leere Spalten am Ende)
+            num_cols = 0
+            for i, h in enumerate(headers):
+                if h is not None or any(row[i] if i < len(row) else None for row in data_rows):
+                    num_cols = i + 1
+            
+            if num_cols < 2:
+                QMessageBox.warning(self, "Fehler", 
+                    "Excel-Datei muss mindestens 2 Spalten haben (X-Werte + Y-Werte)!")
+                wb.close()
+                return
+            
+            # Headers für alle Spalten (Standard-Namen wenn leer)
+            col_headers = []
+            for i in range(num_cols):
+                h = headers[i] if i < len(headers) and headers[i] else f"Spalte {i+1}"
+                col_headers.append(str(h))
+            
+            # Daten parsen
+            x_data = []
+            y_columns = {col_headers[i]: [] for i in range(1, num_cols)}
+            
+            parse_errors = 0
+            for row_idx, row in enumerate(data_rows, start=2):
+                try:
+                    # X-Wert (erste Spalte)
+                    x_val = self.parse_german_number(row[0] if len(row) > 0 else None)
+                    x_data.append(x_val)
+                    
+                    # Y-Werte (restliche Spalten)
+                    for i in range(1, num_cols):
+                        col_name = col_headers[i]
+                        try:
+                            cell_val = row[i] if i < len(row) else None
+                            y_val = self.parse_german_number(cell_val)
+                            y_columns[col_name].append(y_val)
+                        except ValueError:
+                            y_columns[col_name].append(None)
+                            
+                except ValueError:
+                    # X-Wert konnte nicht geparst werden - Zeile überspringen
+                    parse_errors += 1
+                    continue
+            
+            wb.close()
+            
+            # Datensätze erstellen
+            if x_data and y_columns:
+                excel_name = Path(file_path).stem
+                datasets_added = 0
+                
+                for col_name, y_values in y_columns.items():
+                    # Filtere None-Werte heraus
+                    valid_pairs = [(x, y) for x, y in zip(x_data, y_values) if y is not None]
+                    
+                    if valid_pairs:
+                        valid_x = [pair[0] for pair in valid_pairs]
+                        valid_y = [pair[1] for pair in valid_pairs]
+                        
+                        dataset = {
+                            'path': file_path,
+                            'time': valid_x,
+                            'values': valid_y,
+                            'label': f"{excel_name} - {col_name}"
+                        }
+                        self.datasets.append(dataset)
+                        
+                        # Zur Liste hinzufügen
+                        self.file_list.addItem(QListWidgetItem(
+                            f"{excel_name} - {col_name} ({len(valid_x)} Punkte)"
+                        ))
+                        datasets_added += 1
+                
+                if datasets_added > 0:
+                    # Legendenfelder aktualisieren
+                    self.update_legend_fields()
+                    
+                    # Auto-Grenzen aktualisieren
+                    self.update_auto_limits()
+                    
+                    # Info über Parse-Fehler anzeigen
+                    if parse_errors > 0:
+                        QMessageBox.information(self, "Hinweis", 
+                            f"Excel-Datei geladen.\n"
+                            f"{datasets_added} Datenreihe(n) mit insgesamt {len(x_data)} Punkten.\n"
+                            f"{parse_errors} Zeile(n) übersprungen (ungültige X-Werte).")
+                else:
+                    QMessageBox.warning(self, "Fehler", 
+                        "Keine gültigen Daten gefunden!\n"
+                        "Überprüfen Sie das Zahlenformat in der Excel-Datei.")
+            else:
+                QMessageBox.warning(self, "Fehler", "Excel-Datei enthält keine gültigen Zahlendaten!")
+                
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Fehler", f"Datei nicht gefunden: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler beim Laden", f"Fehler: {str(e)}")
+
     def update_auto_limits(self):
         """Aktualisiere die Auto-Grenzen basierend auf allen geladenen Datensätzen"""
         if not self.datasets:
