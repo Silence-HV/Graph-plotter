@@ -15,7 +15,7 @@ from PyQt5.QtCore import QMimeData
 import matplotlib
 
 # Versionsnummer
-VERSION = "1.7"  # Excel-Import mit deutscher Zahlenformatierung
+VERSION = "1.8"  # Statistik-Modus für Excel-Dateien
 matplotlib.use('Qt5Agg')  # Stelle sicher, dass Qt5 Backend verwendet wird
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -773,27 +773,63 @@ class GraphPlotter(QMainWindow):
                 excel_name = Path(file_path).stem
                 datasets_added = 0
                 
-                for col_name, y_values in y_columns.items():
-                    # Filtere None-Werte heraus
-                    valid_pairs = [(x, y) for x, y in zip(x_data, y_values) if y is not None]
+                # Prüfe ob Statistik-Modus aktiv ist
+                if self.statistics_mode.isChecked():
+                    # Statistik-Modus: Alle Y-Spalten als Messwiederholungen interpretieren
+                    num_y_columns = len(y_columns)
                     
-                    if valid_pairs:
-                        valid_x = [pair[0] for pair in valid_pairs]
-                        valid_y = [pair[1] for pair in valid_pairs]
+                    # Konvertiere zu numpy Array für statistische Berechnungen
+                    # Ersetze None durch np.nan
+                    y_list = []
+                    for col_name in y_columns:
+                        y_vals = [v if v is not None else np.nan for v in y_columns[col_name]]
+                        y_list.append(y_vals)
+                    
+                    y_array = np.array(y_list)  # Shape: (num_columns, num_points)
+                    
+                    # Berechne Mittelwert und Standardabweichung über alle Spalten
+                    mean_values = np.nanmean(y_array, axis=0)
+                    std_values = np.nanstd(y_array, axis=0)
+                    
+                    # Erstelle Datensatz mit Statistik
+                    dataset = {
+                        'path': file_path,
+                        'time': x_data,
+                        'values': mean_values.tolist(),
+                        'std': std_values.tolist(),
+                        'label': f"{excel_name} (n={num_y_columns})",
+                        'is_statistics': True
+                    }
+                    self.datasets.append(dataset)
+                    
+                    # Zur Liste hinzufügen
+                    self.file_list.addItem(QListWidgetItem(
+                        f"{excel_name} (Statistik: {num_y_columns} Messungen, {len(x_data)} Punkte)"
+                    ))
+                    datasets_added = 1
+                else:
+                    # Standard-Modus: Jede Y-Spalte als eigener Datensatz
+                    for col_name, y_values in y_columns.items():
+                        # Filtere None-Werte heraus
+                        valid_pairs = [(x, y) for x, y in zip(x_data, y_values) if y is not None]
                         
-                        dataset = {
-                            'path': file_path,
-                            'time': valid_x,
-                            'values': valid_y,
-                            'label': f"{excel_name} - {col_name}"
-                        }
-                        self.datasets.append(dataset)
-                        
-                        # Zur Liste hinzufügen
-                        self.file_list.addItem(QListWidgetItem(
-                            f"{excel_name} - {col_name} ({len(valid_x)} Punkte)"
-                        ))
-                        datasets_added += 1
+                        if valid_pairs:
+                            valid_x = [pair[0] for pair in valid_pairs]
+                            valid_y = [pair[1] for pair in valid_pairs]
+                            
+                            dataset = {
+                                'path': file_path,
+                                'time': valid_x,
+                                'values': valid_y,
+                                'label': f"{excel_name} - {col_name}"
+                            }
+                            self.datasets.append(dataset)
+                            
+                            # Zur Liste hinzufügen
+                            self.file_list.addItem(QListWidgetItem(
+                                f"{excel_name} - {col_name} ({len(valid_x)} Punkte)"
+                            ))
+                            datasets_added += 1
                 
                 if datasets_added > 0:
                     # Legendenfelder aktualisieren
