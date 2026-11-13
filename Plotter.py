@@ -1109,18 +1109,44 @@ class GraphPlotter(QMainWindow):
                     filtered_std = scaled_std[mask]
                     
                     if len(filtered_time) > 0:
+                        # Nur tatsächliche Datenpunkte mit gültigem Mittelwert und Std.-Abw. anzeigen
+                        valid_mask = np.isfinite(filtered_values) & np.isfinite(filtered_std)
+                        filtered_time = filtered_time[valid_mask]
+                        filtered_values = filtered_values[valid_mask]
+                        filtered_std = filtered_std[valid_mask]
+
+                    if len(filtered_time) > 0:
                         # Label für Legende vorbereiten
-                        legend_label = f'{label} (Y2)' if use_y2 else f'{label} (Mittelwert)'
-                        
-                        # Fehlerband (Standardabweichung) zeichnen
-                        current_ax.fill_between(filtered_time, 
-                                        filtered_values - filtered_std,
-                                        filtered_values + filtered_std, 
-                                        alpha=0.3 * marker_alpha, color=color)
-                        
-                        # Mittelwert-Linie zeichnen mit Label für Toolbar-Bearbeitung
-                        line, = current_ax.plot(filtered_time, filtered_values, color=color, 
-                                linewidth=2, marker='', alpha=line_alpha, label=legend_label)
+                        legend_label = f'{label} (Y2)' if use_y2 else f'{label} (Mittelwert ± SD)'
+
+                        # Mittelwert als gut sichtbare Punkte mit gestrichelter Verlaufslinie
+                        line, = current_ax.plot(
+                            filtered_time,
+                            filtered_values,
+                            color=color,
+                            linestyle='--',
+                            linewidth=1.8,
+                            marker='o',
+                            markersize=6,
+                            markerfacecolor='white',
+                            markeredgecolor=color,
+                            markeredgewidth=1.3,
+                            alpha=line_alpha,
+                            label=legend_label
+                        )
+
+                        # Klassische vertikale Fehlerbalken (+/- Standardabweichung)
+                        current_ax.errorbar(
+                            filtered_time,
+                            filtered_values,
+                            yerr=filtered_std,
+                            fmt='none',
+                            ecolor=color,
+                            elinewidth=1.2,
+                            capsize=3,
+                            capthick=1.2,
+                            alpha=marker_alpha
+                        )
                         
                         # Für Legende sammeln
                         if use_y2:
