@@ -8,12 +8,13 @@ import sys
 import traceback
 from pathlib import Path
 
-import matplotlib
+os.environ.setdefault("QT_API", "pyside6")  # Matplotlib soll PySide6 verwenden
 
-matplotlib.use("Qt5Agg")
+import matplotlib  # noqa: E402
 
-from PyQt5.QtCore import Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QMessageBox  # noqa: E402
+matplotlib.use("QtAgg")
+
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from . import VERSION  # noqa: E402
 from .plotting import STYLE_RC  # noqa: E402
@@ -53,30 +54,34 @@ def _install_excepthook(log_path: Path | None) -> None:
         if sys.__stderr__ is not None:  # in der .exe (--windowed) gibt es kein stderr
             print(details, file=sys.__stderr__, flush=True)
         if QApplication.instance() is not None:
-            box = QMessageBox(QMessageBox.Critical, "Unerwarteter Fehler",
+            box = QMessageBox(QMessageBox.Icon.Critical, "Unerwarteter Fehler",
                               f"Es ist ein unerwarteter Fehler aufgetreten:\n\n{exc_value}")
             if log_path is not None:
                 box.setInformativeText(f"Details wurden gespeichert in:\n{log_path}")
             box.setDetailedText(details)
-            box.exec_()
+            box.exec()
         else:
             sys.__excepthook__(exc_type, exc_value, exc_tb)
 
     sys.excepthook = handle
 
 
+_app = None
+_window = None
+
+
 def main(argv: list[str] | None = None) -> int:
+    global _app, _window
     argv = list(sys.argv if argv is None else argv)
     log_path = _setup_logging()
     log.info("Graph Plotter v%s gestartet", VERSION)
     _install_excepthook(log_path)
 
-    global _app, _window
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     # Modulweit halten: Würde die Anwendung beim Verlassen von main() abgebaut, stürzt ein
     # Fehlerdialog im excepthook ab (Zugriff auf ein zerstörtes Qt-Objekt).
     _app = QApplication.instance() or QApplication(argv)
+    _app.setApplicationName("Graph Plotter")
+    _app.setOrganizationName("GraphPlotter")
 
     from .ui.main_window import MainWindow
 
@@ -85,8 +90,4 @@ def main(argv: list[str] | None = None) -> int:
     # Dateien von der Kommandozeile bzw. „Öffnen mit“ laden
     if len(argv) > 1:
         _window.open_paths(argv[1:])
-    return _app.exec_()
-
-
-_app = None
-_window = None
+    return _app.exec()

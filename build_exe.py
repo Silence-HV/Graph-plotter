@@ -44,13 +44,16 @@ pyinstaller_cmd = [
     "--onefile",  # Einzelne .exe statt Ordner
     "--windowed",  # Keine Konsole
     "--icon=NONE",  # Kein Icon (optional)
-    "--collect-all=PyQt5",  # Alle PyQt5-Module und Binaries sammeln
-    "--collect-all=PyQt5.sip",  # sip-Modul sammeln
-    "--hidden-import=PyQt5.sip",
-    "--hidden-import=sip",
-    "--hidden-import=matplotlib.backends.backend_qt5agg",
+    # Oberfläche: PySide6 (Qt 6). Andere Qt-Bindungen ausschließen, falls sie in der
+    # Umgebung installiert sind – PyInstaller bricht sonst wegen mehrerer Qt-Bindungen ab.
+    "--exclude-module=PyQt5",
+    "--exclude-module=PyQt6",
+    "--exclude-module=PySide2",
+    "--hidden-import=PySide6.QtSvg",
+    "--hidden-import=matplotlib.backends.backend_qtagg",
     "--hidden-import=matplotlib.backends.backend_pdf",
     "--hidden-import=matplotlib.backends.backend_svg",
+    "--hidden-import=matplotlib.backends.backend_ps",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
     "--hidden-import=xlrd",  # .xls-Unterstützung (wird nur bei Bedarf importiert)

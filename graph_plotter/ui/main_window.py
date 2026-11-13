@@ -3,405 +3,429 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
-import matplotlib
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
-from PyQt5.QtCore import QEvent, QItemSelectionModel, Qt
-from PyQt5.QtGui import QFont, QKeySequence
-from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-                             QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-                             QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-                             QShortcut, QSpinBox, QTableWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QByteArray, QMimeData, QSettings, QSize, Qt, QTimer
+from PySide6.QtGui import (QAction, QActionGroup, QGuiApplication, QImage, QKeySequence,
+                           QShortcut)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout,
+                               QLabel, QMainWindow, QMenu, QMessageBox, QSizePolicy, QSplitter,
+                               QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
 from .. import VERSION
-from ..exporting import FORMATS, ExportOptions, export_plot, is_vector, normalize_extension
+from ..exporting import FORMATS, export_bytes, export_plot, normalize_extension, options_from_settings
 from ..loaders import (CSV_EXTENSIONS, EXCEL_EXTENSIONS, LoadError, default_spec, is_supported,
                        load_datasets, read_table)
 from ..model import DEFAULT_COLORS, Dataset
-from ..plotting import LEGEND_LOCATIONS, STAT_STYLES, PlotError, PlotSettings, render
+from ..plotting import PlotError, PlotSettings, render
+from ..presets import PRESETS, matching_preset
 from ..project import PROJECT_EXTENSION, load_project, save_project
-from ..stats import ERROR_MODE_NAMES
-from .dialogs import ExportDialog, ImportDialog, StyleDialog
-from .widgets import AxisBox, ColorButton
+from . import icons, theme
+from .dataset_list import DatasetListView, DatasetModel
+from .import_dialog import ImportDialog
+from .panels import AppearancePanel, AxesPanel, DatasetEditor, ExportPanel, scrollable
+from .plot_view import PlotView
 
-# (Filtertext, Endung) für den Speichern-Dialog
 EXPORT_FILTERS = [(f"{text} (*.{ext})", ext) for ext, (text, _) in FORMATS.items()]
-
-COL_VISIBLE, COL_COLOR, COL_LABEL, COL_AXIS, COL_STYLE = range(5)
+LIVE_DELAY_MS = 250
+MAX_RECENT = 10
+EMPTY_HINT = "Dateien hierher ziehen\noder über „Öffnen“ laden"
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, store: Optional[QSettings] = None):
         super().__init__()
-        self.setWindowTitle(f"Graph Plotter (v{VERSION})")
-        self.resize(1400, 850)
-        self.setAcceptDrops(True)
-
+        self.store = store if store is not None else QSettings("GraphPlotter", "GraphPlotter")
         self.datasets: list[Dataset] = []
+        self._project_path: Optional[str] = None
         self._has_plot = False
-        self._last_dir = str(Path.home())
-        self._export = {"use_window": True, "width_cm": 16.0, "height_cm": 10.0, "dpi": 300}
+        self._loading = False
+        self._summary = ""
+        self._last_dir = str(self.store.value("last_dir", str(Path.home())))
+        self._theme_mode = str(self.store.value("theme", "system"))
+        self.setAcceptDrops(True)
+        self.resize(1500, 900)
 
-        central = QWidget()
-        layout = QHBoxLayout(central)
-        layout.addWidget(self._build_control_panel())
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(LIVE_DELAY_MS)
+        self._timer.timeout.connect(self.replot)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        self.fig = Figure(figsize=(8, 6), dpi=100)
-        self.canvas = FigureCanvas(self.fig)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        right_layout.addWidget(self.toolbar)
-        right_layout.addWidget(self.canvas, 1)
-        layout.addWidget(right, 1)
-        self.setCentralWidget(central)
+        self.model = DatasetModel(self.datasets, self)
+        self.model.edited.connect(self._list_edited)
 
-        self.statusBar().showMessage("Dateien laden: Button „Dateien laden…“ oder per Drag & Drop ins Fenster.")
-        self._apply_y2_visibility()
+        self._build_actions()
+        self._build_toolbar()
+        self._build_central()
+        self._build_statusbar()
+        self._restore_state()
+        self.set_theme(self._theme_mode, save=False)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
 
-    # ------------------------------------------------------------------ Aufbau
+        self._update_title()
+        self._sync_preset()
+        self._update_page_size()
+        self.replot()
 
-    def _build_control_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+    # ================================================================== Aufbau
 
-        layout.addWidget(self._build_data_box())
+    def _action(self, text: str, slot, shortcut=None, tip: str = "") -> QAction:
+        action = QAction(text, self)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        action.setToolTip(tip or text)
+        action.triggered.connect(slot)
+        self.addAction(action)
+        return action
 
-        stat_box = QGroupBox("Statistik (Messwiederholungen)")
-        stat_form = QFormLayout(stat_box)
-        self.error_mode_combo = QComboBox()
-        for key, text in ERROR_MODE_NAMES.items():
-            self.error_mode_combo.addItem(text, key)
-        self.error_mode_combo.setToolTip("SD: Streuung der Einzelmessungen (Stichprobe, n−1)\n"
-                                         "SEM: Unsicherheit des Mittelwerts (SD/√n)\n"
-                                         "95 %-KI: Konfidenzintervall des Mittelwerts (t-Verteilung)")
-        self.stat_style_combo = QComboBox()
-        for key, text in STAT_STYLES.items():
-            self.stat_style_combo.addItem(text, key)
-        stat_form.addRow("Fehlermaß:", self.error_mode_combo)
-        stat_form.addRow("Darstellung:", self.stat_style_combo)
-        layout.addWidget(stat_box)
+    def _build_actions(self) -> None:
+        self.act_load = self._action("Dateien laden…", lambda: self.choose_files(), "Ctrl+O",
+                                     "CSV-, Text- und Excel-Dateien laden (Strg+O)")
+        self.act_load_stats = self._action("Als Messwiederholungen laden…",
+                                           lambda: self.choose_files(statistics=True),
+                                           tip="Alle Y-Spalten einer Datei zu Mittelwert ± Fehler zusammenfassen")
+        self.act_open_project = self._action("Projekt öffnen…", lambda: self.open_project(), "Ctrl+Shift+O")
+        self.act_import_dialog = QAction("Importdialog anzeigen", self)
+        self.act_import_dialog.setCheckable(True)
+        self.act_import_dialog.setChecked(self.store.value("import_dialog", True, type=bool))
+        self.act_save = self._action("Speichern", lambda: self.save_project(), "Ctrl+S",
+                                     "Projekt speichern: Dateien und alle Einstellungen (Strg+S)")
+        self.act_save_as = self._action("Speichern unter…", lambda: self.save_project(save_as=True),
+                                        "Ctrl+Shift+S")
+        self.act_export = self._action("Exportieren", self.export, "Ctrl+E",
+                                       "Plot als PDF, SVG, PNG … speichern (Strg+E)")
+        self.act_copy = self._action("Kopieren", self.copy_plot, "Ctrl+Shift+C",
+                                     "Plot in die Zwischenablage kopieren – zum Einfügen in Word/PowerPoint "
+                                     "(Strg+Umschalt+C)")
 
-        self.x_box = AxisBox("X-Achse", "X-Achse", "Zeit", "z. B. s")
-        self.y_box = AxisBox("Y-Achse", "Y-Achse", "Wert", "z. B. V, m/s²")
-        layout.addWidget(self.x_box)
-        layout.addWidget(self.y_box)
+    def _build_toolbar(self) -> None:
+        bar = QToolBar("Werkzeuge")
+        bar.setMovable(False)
+        bar.setIconSize(QSize(18, 18))
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(bar)
+        self.toolbar = bar
 
-        self.y2_check = QCheckBox("Sekundäre Y-Achse (Y2) aktivieren")
-        self.y2_check.setToolTip("Datensätze werden in der Tabelle oben über die Spalte „Achse“ zugeordnet.")
-        self.y2_check.toggled.connect(self._apply_y2_visibility)
-        layout.addWidget(self.y2_check)
-        self.y2_box = AxisBox("Y2-Achse", "Y2-Achse", "Wert 2", "z. B. °C")
-        layout.addWidget(self.y2_box)
-        self.y2_warning = QLabel("Hinweis: Bei aktivierter Y2-Achse die Kurvenbearbeitung über die "
-                                 "Toolbar meiden – sie baut die Legende ohne Y2-Einträge neu auf.")
-        self.y2_warning.setWordWrap(True)
-        self.y2_warning.setStyleSheet("color: #cc7700; font-size: 9pt;")
-        layout.addWidget(self.y2_warning)
+        self.recent_menu = QMenu("Zuletzt geöffnet", self)
+        open_menu = QMenu(self)
+        for action in (self.act_load, self.act_load_stats, self.act_open_project):
+            open_menu.addAction(action)
+        open_menu.addMenu(self.recent_menu)
+        open_menu.addSeparator()
+        open_menu.addAction(self.act_import_dialog)
+        self.open_button = self._menu_button("Öffnen", open_menu, self.choose_files,
+                                             "Dateien laden (Strg+O) – Pfeil für weitere Optionen")
+        bar.addWidget(self.open_button)
 
-        layout.addWidget(self._build_appearance_box())
+        save_menu = QMenu(self)
+        save_menu.addAction(self.act_save_as)
+        self.save_button = self._menu_button("Speichern", save_menu, lambda: self.save_project(),
+                                             self.act_save.toolTip())
+        bar.addWidget(self.save_button)
+        bar.addSeparator()
+        bar.addAction(self.act_export)
+        bar.addAction(self.act_copy)
+        bar.addSeparator()
 
-        plot_button = QPushButton("Plot erstellen")
-        plot_button.setFont(QFont("Arial", 12, QFont.Bold))
-        plot_button.setStyleSheet("background-color: #4CAF50; color: white; padding: 10px;")
-        plot_button.setShortcut("Ctrl+R")
-        plot_button.setToolTip("Strg+R")
-        plot_button.clicked.connect(lambda: self.plot())
-        layout.addWidget(plot_button)
+        preset_label = QLabel("  Vorlage ")
+        preset_label.setObjectName("Muted")
+        bar.addWidget(preset_label)
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Benutzerdefiniert", None)
+        for key, preset in PRESETS.items():
+            self.preset_combo.addItem(preset.name, key)
+        self.preset_combo.setToolTip("Setzt Schriftgrößen und Exportgröße für den gewählten Zweck")
+        self.preset_combo.activated.connect(self._preset_chosen)
+        bar.addWidget(self.preset_combo)
 
-        export_button = QPushButton("Plot exportieren")
-        export_button.setFont(QFont("Arial", 12, QFont.Bold))
-        export_button.setStyleSheet("background-color: #2196F3; color: white; padding: 10px;")
-        export_button.setShortcut("Ctrl+E")
-        export_button.setToolTip("Strg+E")
-        export_button.clicked.connect(self.export_plot)
-        layout.addWidget(export_button)
-        layout.addStretch()
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar.addWidget(spacer)
 
-        scroll = QScrollArea()
-        scroll.setWidget(panel)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setMinimumWidth(450)
-        scroll.setMaximumWidth(520)
-        return scroll
-
-    def _build_data_box(self) -> QGroupBox:
-        box = QGroupBox("Daten")
-        layout = QVBoxLayout(box)
-
-        buttons = QHBoxLayout()
-        load_button = QPushButton("Dateien laden…")
-        load_button.setToolTip("CSV-, Text- und Excel-Dateien (Strg+O)")
-        load_button.setShortcut("Ctrl+O")
-        load_button.clicked.connect(self.choose_files)
-        open_project = QPushButton("Projekt öffnen…")
-        open_project.clicked.connect(self.open_project)
-        save_project_button = QPushButton("Projekt speichern…")
-        save_project_button.setShortcut("Ctrl+S")
-        save_project_button.setToolTip("Dateien und alle Einstellungen speichern (Strg+S)")
-        save_project_button.clicked.connect(self.save_project)
-        for b in (load_button, open_project, save_project_button):
-            buttons.addWidget(b)
-        layout.addLayout(buttons)
-
-        self.import_dialog_check = QCheckBox("Importdialog mit Vorschau anzeigen")
-        self.import_dialog_check.setChecked(True)
-        self.import_dialog_check.setToolTip("Ohne Dialog werden Kopfzeile und Datenbeginn automatisch erkannt;\n"
-                                            "Spalte 1 = X, alle weiteren Spalten = Y.")
-        self.stat_default_check = QCheckBox("Statistik-Modus: Y-Spalten als Messwiederholungen")
-        self.stat_default_check.setToolTip("Voreinstellung für neu geladene Dateien: alle Y-Spalten einer Datei\n"
-                                           "werden zu Mittelwert ± Fehlermaß zusammengefasst.")
-        layout.addWidget(self.import_dialog_check)
-        layout.addWidget(self.stat_default_check)
-
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["", "Farbe", "Legende", "Achse", ""])
-        self.table.horizontalHeaderItem(COL_VISIBLE).setToolTip("Sichtbar")
-        self.table.horizontalHeaderItem(COL_STYLE).setToolTip("Darstellung und Kurvenanpassung")
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(COL_LABEL, QHeaderView.Stretch)
-        for col, width in ((COL_VISIBLE, 28), (COL_COLOR, 44), (COL_AXIS, 58), (COL_STYLE, 34)):
-            header.setSectionResizeMode(col, QHeaderView.Fixed)
-            self.table.setColumnWidth(col, width)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setMinimumHeight(170)
-        self.table.verticalHeader().setToolTip("Klicken zum Auswählen (Strg/Umschalt für Mehrfachauswahl)")
-        QShortcut(QKeySequence.Delete, self.table, self.remove_selected, context=Qt.WidgetShortcut)
-        layout.addWidget(self.table)
-
-        row_buttons = QHBoxLayout()
-        up = QPushButton("▲")
-        up.setToolTip("Nach oben")
-        up.clicked.connect(lambda: self.move_selected(-1))
-        down = QPushButton("▼")
-        down.setToolTip("Nach unten")
-        down.clicked.connect(lambda: self.move_selected(1))
-        remove = QPushButton("Entfernen")
-        remove.setToolTip("Ausgewählte Datensätze entfernen (Entf)")
-        remove.clicked.connect(self.remove_selected)
-        remove_all = QPushButton("Alle entfernen")
-        remove_all.clicked.connect(self.remove_all)
-        for b in (up, down):
-            b.setMaximumWidth(36)
-            row_buttons.addWidget(b)
-        row_buttons.addWidget(remove)
-        row_buttons.addWidget(remove_all)
-        layout.addLayout(row_buttons)
-        return box
-
-    def _build_appearance_box(self) -> QGroupBox:
-        box = QGroupBox("Darstellung")
-        form = QFormLayout(box)
-        self.title_edit = QLineEdit()
-        self.title_edit.setPlaceholderText("optional")
-        form.addRow("Titel:", self.title_edit)
-
-        self.label_size = self._size_spin(30)
-        self.tick_size = self._size_spin(24)
-        self.legend_size = self._size_spin(30)
-        sizes = QHBoxLayout()
-        for text, spin in (("Achsen", self.label_size), ("Ticks", self.tick_size), ("Legende", self.legend_size)):
-            sizes.addWidget(QLabel(text))
-            sizes.addWidget(spin)
-        form.addRow("Schrift (pt):", sizes)
-
-        self.legend_combo = QComboBox()
-        for key, text in LEGEND_LOCATIONS.items():
-            self.legend_combo.addItem(text, key)
-        form.addRow("Legende:", self.legend_combo)
-
-        self.grid_check = QCheckBox("Raster")
-        self.grid_check.setChecked(True)
-        self.minor_check = QCheckBox("Nebenticks")
-        checks = QHBoxLayout()
-        checks.addWidget(self.grid_check)
-        checks.addWidget(self.minor_check)
-        checks.addStretch()
-        form.addRow(checks)
-        return box
+        theme_menu = QMenu(self)
+        group = QActionGroup(self)
+        self.theme_actions = {}
+        for mode, text in theme.THEME_MODES.items():
+            action = QAction(text, self, checkable=True)
+            action.triggered.connect(lambda _=False, m=mode: self.set_theme(m))
+            group.addAction(action)
+            theme_menu.addAction(action)
+            self.theme_actions[mode] = action
+        theme_menu.addSeparator()
+        theme_menu.addAction("Über Graph Plotter…", self._about)
+        self.theme_button = QToolButton()
+        self.theme_button.setText("Farbschema")
+        self.theme_button.setToolTip("Farbschema und Programminfo")
+        self.theme_button.setMenu(theme_menu)
+        self.theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.theme_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bar.addWidget(self.theme_button)
 
     @staticmethod
-    def _size_spin(value: int) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(4, 96)
-        spin.setValue(value)
-        return spin
+    def _menu_button(text: str, menu: QMenu, slot, tip: str) -> QToolButton:
+        button = QToolButton()
+        button.setText(text)
+        button.setToolTip(tip)
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.clicked.connect(lambda: slot())
+        return button
 
-    # ------------------------------------------------------------------ Datensatz-Tabelle
+    def _build_central(self) -> None:
+        # Links: Datensätze
+        left = QWidget()
+        left.setObjectName("SidePanel")
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(8, 8, 8, 8)
+        header = QHBoxLayout()
+        title = QLabel("DATEN")
+        title.setObjectName("PanelTitle")
+        header.addWidget(title)
+        header.addStretch()
+        self.list_buttons = {}
+        for key, tip, slot in (("add", "Dateien laden (Strg+O)", lambda: self.choose_files()),
+                               ("remove", "Ausgewählte entfernen (Entf)", self.remove_selected),
+                               ("up", "Nach oben (Strg+↑)", lambda: self.move_selected(-1)),
+                               ("down", "Nach unten (Strg+↓)", lambda: self.move_selected(1))):
+            button = QToolButton()
+            button.setToolTip(tip)
+            button.setAutoRaise(True)
+            button.clicked.connect(slot)
+            header.addWidget(button)
+            self.list_buttons[key] = button
+        left_layout.addLayout(header)
+        self.list_view = DatasetListView(self.model)
+        self.list_view.selectionModel().selectionChanged.connect(self._selection_changed)
+        left_layout.addWidget(self.list_view, 1)
+        for key, slot in ((QKeySequence.StandardKey.Delete, self.remove_selected),
+                          ("Ctrl+Up", lambda: self.move_selected(-1)),
+                          ("Ctrl+Down", lambda: self.move_selected(1))):
+            shortcut = QShortcut(QKeySequence(key), self.list_view)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(slot)
 
-    def rebuild_table(self, select: list[int] | None = None) -> None:
-        self.table.setRowCount(0)
-        self.table.setRowCount(len(self.datasets))
-        self.table.setVerticalHeaderLabels([f"G{i + 1}" for i in range(len(self.datasets))])
-        y2 = self.y2_check.isChecked()
+        # Mitte: Plot
+        self.plot_view = PlotView()
+        self.plot_view.label_lookup = self._label_for
+        self.plot_view.hover.connect(lambda text: self.coords_label.setText(text))
+        self.plot_view.measured.connect(self._measured)
 
-        for row, ds in enumerate(self.datasets):
-            visible = QCheckBox()
-            visible.setChecked(ds.visible)
-            visible.setToolTip("Sichtbar")
-            visible.toggled.connect(lambda checked, d=ds: setattr(d, "visible", checked))
-            holder = QWidget()
-            holder_layout = QHBoxLayout(holder)
-            holder_layout.setContentsMargins(0, 0, 0, 0)
-            holder_layout.setAlignment(Qt.AlignCenter)
-            holder_layout.addWidget(visible)
-            self.table.setCellWidget(row, COL_VISIBLE, holder)
+        # Rechts: Eigenschaften
+        self.editor = DatasetEditor()
+        self.axes_panel = AxesPanel()
+        self.appearance = AppearancePanel()
+        self.export_panel = ExportPanel()
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("SidePanel")
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(scrollable(self.editor), "Datensatz")
+        self.tabs.addTab(scrollable(self.axes_panel), "Achsen")
+        self.tabs.addTab(scrollable(self.appearance), "Darstellung")
+        self.tabs.addTab(scrollable(self.export_panel), "Export")
 
-            color = ColorButton(ds.color or DEFAULT_COLORS[row % len(DEFAULT_COLORS)])
-            color.colorChanged.connect(lambda c, d=ds: setattr(d, "color", c))
-            color_holder = QWidget()
-            color_layout = QHBoxLayout(color_holder)
-            color_layout.setContentsMargins(0, 0, 0, 0)
-            color_layout.setAlignment(Qt.AlignCenter)
-            color_layout.addWidget(color)
-            self.table.setCellWidget(row, COL_COLOR, color_holder)
+        self.editor.changed.connect(self._editor_changed)
+        self.axes_panel.changed.connect(self.schedule)
+        self.appearance.changed.connect(self._appearance_changed)
+        self.export_panel.changed.connect(self._export_changed)
 
-            label = QLineEdit(ds.label)
-            label.setPlaceholderText(ds.name)
-            label.setToolTip(self._dataset_tooltip(ds))
-            label.textChanged.connect(lambda text, d=ds: setattr(d, "label", text))
-            self._track_row(label, row)
-            self.table.setCellWidget(row, COL_LABEL, label)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(left)
+        self.splitter.addWidget(self.plot_view)
+        self.splitter.addWidget(self.tabs)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([290, 880, 360])
+        self.splitter.setChildrenCollapsible(False)
+        left.setMinimumWidth(220)
+        self.tabs.setMinimumWidth(320)
+        self.setCentralWidget(self.splitter)
 
-            axis = QComboBox()
-            axis.addItems(["Y1", "Y2"])
-            axis.setCurrentText(ds.axis)
-            axis.setEnabled(y2)
-            axis.currentTextChanged.connect(lambda text, d=ds: setattr(d, "axis", text))
-            self._track_row(axis, row)
-            self.table.setCellWidget(row, COL_AXIS, axis)
+    def _build_statusbar(self) -> None:
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(False)
+        self.status_label = QLabel()
+        self.warning_label = QLabel()
+        self.warning_label.setObjectName("Warning")
+        self.coords_label = QLabel()
+        self.coords_label.setObjectName("Muted")
+        bar.addWidget(self.status_label, 1)
+        bar.addWidget(self.warning_label)
+        bar.addPermanentWidget(self.coords_label)
 
-            style = QToolButton()
-            style.setText("…")
-            style.setToolTip("Darstellung und Kurvenanpassung")
-            style.clicked.connect(lambda _=False, r=row: self.edit_style(r))
-            self.table.setCellWidget(row, COL_STYLE, style)
+    def refresh_icons(self) -> None:
+        color = theme.colors()["text"]
+        self.open_button.setIcon(icons.icon("open", color))
+        self.save_button.setIcon(icons.icon("save", color))
+        self.act_export.setIcon(icons.icon("export", color))
+        self.act_copy.setIcon(icons.icon("copy", color))
+        self.theme_button.setIcon(icons.icon("theme", color))
+        for key, button in self.list_buttons.items():
+            button.setIcon(icons.icon(key, color))
+        self.plot_view.refresh_icons()
+        self.setWindowIcon(icons.icon("chart", theme.colors()["accent"]))
 
-        if select:
-            model = self.table.selectionModel()
-            for row in select:
-                if 0 <= row < len(self.datasets):
-                    model.select(self.table.model().index(row, 0),
-                                 QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    # ================================================================== Zustand
 
-    @staticmethod
-    def _dataset_tooltip(ds: Dataset) -> str:
-        lines = []
-        if ds.spec is not None:
-            lines.append(ds.spec.path)
-            if ds.spec.sheet:
-                lines.append(f"Tabellenblatt: {ds.spec.sheet}")
-        lines.append(f"{ds.n_points} Punkte")
-        if ds.is_statistics:
-            lines.append(f"Statistik über {ds.n_repeats} Messwiederholungen")
-        return "\n".join(lines)
+    def _restore_state(self) -> None:
+        geometry = self.store.value("geometry")
+        if isinstance(geometry, QByteArray):
+            self.restoreGeometry(geometry)
+        splitter = self.store.value("splitter")
+        if isinstance(splitter, QByteArray):
+            self.splitter.restoreState(splitter)
+        self._rebuild_recent()
 
-    def _track_row(self, widget: QWidget, row: int) -> None:
-        widget.setProperty("row", row)
-        widget.installEventFilter(self)
+    def closeEvent(self, event) -> None:
+        self.store.setValue("geometry", self.saveGeometry())
+        self.store.setValue("splitter", self.splitter.saveState())
+        self.store.setValue("import_dialog", self.act_import_dialog.isChecked())
+        self.store.setValue("last_dir", self._last_dir)
+        self.store.sync()
+        super().closeEvent(event)
 
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.FocusIn and obj.property("row") is not None:
-            self.table.selectRow(int(obj.property("row")))
-        return super().eventFilter(obj, event)
+    def _recent(self) -> list[str]:
+        value = self.store.value("recent", [])
+        if isinstance(value, str):
+            value = [value]
+        return [str(v) for v in (value or [])]
 
-    def _selected_rows(self) -> list[int]:
-        return sorted({index.row() for index in self.table.selectionModel().selectedRows()})
+    def _add_recent(self, path: str) -> None:
+        path = str(Path(path).resolve())
+        recent = [p for p in self._recent() if p != path]
+        self.store.setValue("recent", [path] + recent[:MAX_RECENT - 1])
+        self._rebuild_recent()
 
-    def move_selected(self, step: int) -> None:
-        rows = self._selected_rows()
-        if not rows:
+    def _rebuild_recent(self) -> None:
+        self.recent_menu.clear()
+        recent = [p for p in self._recent() if Path(p).exists()]
+        if not recent:
+            self.recent_menu.addAction("(keine)").setEnabled(False)
             return
-        if (step < 0 and rows[0] == 0) or (step > 0 and rows[-1] == len(self.datasets) - 1):
+        for path in recent:
+            action = self.recent_menu.addAction(Path(path).name)
+            action.setToolTip(path)
+            action.triggered.connect(lambda _=False, p=path: self.open_paths([p]))
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction("Liste leeren", self._clear_recent)
+
+    def _clear_recent(self) -> None:
+        self.store.setValue("recent", [])
+        self._rebuild_recent()
+
+    def set_theme(self, mode: str, save: bool = True) -> None:
+        if mode not in theme.THEME_MODES:
+            mode = "system"
+        self._theme_mode = mode
+        theme.apply_theme(QApplication.instance(), mode)
+        self.theme_actions[mode].setChecked(True)
+        self.refresh_icons()
+        self.list_view.viewport().update()
+        if save:
+            self.store.setValue("theme", mode)
+
+    def _system_scheme_changed(self, *_args) -> None:
+        if self._theme_mode == "system":
+            self.set_theme("system", save=False)
+
+    def _update_title(self) -> None:
+        name = Path(self._project_path).name if self._project_path else "Unbenannt"
+        self.setWindowTitle(f"{name} – Graph Plotter {VERSION}")
+
+    def _about(self) -> None:
+        from ..app import log_file
+        QMessageBox.about(self, "Über Graph Plotter",
+                          f"<b>Graph Plotter {VERSION}</b><br>Messdaten aus CSV- und Excel-Dateien darstellen."
+                          f"<br><br>Protokolldatei:<br>{log_file()}")
+
+    # ================================================================== Einstellungen
+
+    def collect_settings(self) -> PlotSettings:
+        """Einstellungen aus der Oberfläche. Raises ValueError mit allen ungültigen Feldern."""
+        x, y, y2 = self.axes_panel.axes()
+        settings = PlotSettings(x=x, y=y, y2=y2, y2_enabled=self.axes_panel.y2_check.isChecked())
+        self.appearance.apply_to(settings)
+        settings.export = self.export_panel.settings()
+        return settings
+
+    def load_settings(self, settings: PlotSettings) -> None:
+        self._loading = True
+        try:
+            self.axes_panel.set_axes(settings)
+            self.appearance.load(settings)
+            self.export_panel.load(settings.export)
+        finally:
+            self._loading = False
+        self._sync_preset()
+        self._update_page_size()
+
+    def _current_preset_values(self) -> PlotSettings:
+        s = PlotSettings()
+        self.appearance.apply_to(s)
+        s.export = self.export_panel.settings()
+        return s
+
+    def _sync_preset(self) -> None:
+        key = matching_preset(self._current_preset_values())
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(max(0, self.preset_combo.findData(key)))
+        self.preset_combo.blockSignals(False)
+
+    def _preset_chosen(self, index: int) -> None:
+        key = self.preset_combo.itemData(index)
+        if key is None:
             return
-        for row in (rows if step < 0 else reversed(rows)):
-            self.datasets[row], self.datasets[row + step] = self.datasets[row + step], self.datasets[row]
-        self.rebuild_table([r + step for r in rows])
+        preset = PRESETS[key]
+        self._loading = True
+        try:
+            self.appearance.label_size.setValue(int(preset.label_fontsize))
+            self.appearance.tick_size.setValue(int(preset.tick_fontsize))
+            self.appearance.legend_size.setValue(int(preset.legend_fontsize))
+            self.export_panel.width.setValue(preset.width_cm)
+            self.export_panel.height.setValue(preset.height_cm)
+        finally:
+            self._loading = False
+        self._update_page_size()
+        self.statusBar().showMessage(f"Vorlage „{preset.name}“: Schrift {preset.label_fontsize}/"
+                                     f"{preset.tick_fontsize}/{preset.legend_fontsize} pt, Export "
+                                     f"{preset.width_cm:g} × {preset.height_cm:g} cm".replace(".", ","), 5000)
+        self.schedule()
 
-    def remove_selected(self) -> None:
-        rows = self._selected_rows()
-        if not rows:
-            QMessageBox.information(self, "Entfernen", "Bitte zuerst Datensätze auswählen "
-                                                      "(auf die Nummer G1, G2, … links klicken).")
+    def _appearance_changed(self) -> None:
+        if not self._loading:
+            self._sync_preset()
+        self.schedule()
+
+    def _export_changed(self) -> None:
+        if self._loading:
             return
-        for row in reversed(rows):
-            del self.datasets[row]
-        self.rebuild_table()
+        self._sync_preset()
+        self._update_page_size()
 
-    def remove_all(self) -> None:
-        if not self.datasets:
-            return
-        if QMessageBox.question(self, "Alle entfernen", "Alle Datensätze entfernen?") != QMessageBox.Yes:
-            return
-        self.datasets.clear()
-        self.rebuild_table()
-        self.fig.clear()
-        self.canvas.draw()
-        self._has_plot = False
+    def _update_page_size(self) -> None:
+        e = self.export_panel.settings()
+        self.plot_view.set_page_size(e.width_cm / 2.54, e.height_cm / 2.54)
 
-    def edit_style(self, row: int) -> None:
-        ds = self.datasets[row]
-        dialog = StyleDialog(self, ds)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        style = dialog.line_style()
-        targets = self.datasets if dialog.apply_to_all() else [ds]
-        for target in targets:
-            target.apply_style(style)
-        ds.fit = dialog.fit_kind()
-        if self._has_plot:
-            self.plot(silent=True)
+    # ================================================================== Datensätze
 
-    def _apply_y2_visibility(self) -> None:
-        enabled = self.y2_check.isChecked()
-        self.y2_box.setVisible(enabled)
-        self.y2_warning.setVisible(enabled)
-        for row in range(self.table.rowCount()):
-            widget = self.table.cellWidget(row, COL_AXIS)
-            if widget is not None:
-                widget.setEnabled(enabled)
+    def _label_for(self, index: int) -> str:
+        return self.datasets[index].display_label if 0 <= index < len(self.datasets) else f"G{index + 1}"
 
-    # ------------------------------------------------------------------ Laden
+    def _selected(self) -> list[Dataset]:
+        return [self.datasets[r] for r in self.list_view.selected_rows() if r < len(self.datasets)]
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+    def _selection_changed(self, *_args) -> None:
+        rows = self.list_view.selected_rows()
+        self.editor.set_targets([self.datasets[r] for r in rows],
+                                [self.model.color_of(r) for r in rows])
 
-    def dragMoveEvent(self, event):
-        self.dragEnterEvent(event)
+    def _editor_changed(self) -> None:
+        for row in self.list_view.selected_rows():
+            self.model.row_changed(row)
+        self.schedule()
 
-    def dropEvent(self, event):
-        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]
-        event.acceptProposedAction()
-        self.open_paths(paths)
-
-    def open_paths(self, paths: list[str]) -> None:
-        """Dateien öffnen: Projektdateien werden geöffnet, Datendateien hinzugefügt."""
-        projects = [p for p in paths if p.lower().endswith(PROJECT_EXTENSION)]
-        data_files = [p for p in paths if not p.lower().endswith(PROJECT_EXTENSION)]
-        if projects:
-            self.open_project(projects[0])
-        if data_files:
-            self.add_files(data_files)
-
-    def choose_files(self) -> None:
-        patterns = " ".join(f"*{ext}" for ext in CSV_EXTENSIONS + EXCEL_EXTENSIONS)
-        filters = (f"Messdaten ({patterns});;"
-                   f"CSV/Text ({' '.join('*' + e for e in CSV_EXTENSIONS)});;"
-                   f"Excel ({' '.join('*' + e for e in EXCEL_EXTENSIONS)});;"
-                   "Alle Dateien (*)")
-        paths, _ = QFileDialog.getOpenFileNames(self, "Dateien laden", self._last_dir, filters)
-        if paths:
-            self._last_dir = str(Path(paths[0]).parent)
-            self.add_files(paths)
+    def _list_edited(self) -> None:
+        self._selection_changed()
+        self.schedule()
 
     def _next_color(self) -> str:
         used = {d.color for d in self.datasets}
@@ -410,10 +434,80 @@ class MainWindow(QMainWindow):
                 return color
         return DEFAULT_COLORS[len(self.datasets) % len(DEFAULT_COLORS)]
 
-    def add_files(self, paths: list[str]) -> None:
+    def remove_selected(self) -> None:
+        rows = self.list_view.selected_rows()
+        if not rows:
+            self.statusBar().showMessage("Zum Entfernen zuerst Datensätze in der Liste auswählen.", 4000)
+            return
+        for row in reversed(rows):
+            del self.datasets[row]
+        self.model.refresh()
+        if self.datasets:
+            self.list_view.select_rows([min(rows[0], len(self.datasets) - 1)])
+        self._selection_changed()
+        self.replot()
+
+    def remove_all(self) -> None:
+        if not self.datasets:
+            return
+        if QMessageBox.question(self, "Alle entfernen", "Alle Datensätze entfernen?") != QMessageBox.StandardButton.Yes:
+            return
+        self.datasets.clear()
+        self.model.refresh()
+        self._selection_changed()
+        self.replot()
+
+    def move_selected(self, step: int) -> None:
+        rows = self.list_view.selected_rows()
+        if not rows or (step < 0 and rows[0] == 0) or (step > 0 and rows[-1] == len(self.datasets) - 1):
+            return
+        for row in (rows if step < 0 else list(reversed(rows))):
+            self.datasets[row], self.datasets[row + step] = self.datasets[row + step], self.datasets[row]
+        self.model.refresh()
+        self.list_view.select_rows([r + step for r in rows])
+        self.schedule()
+
+    # ================================================================== Laden
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]
+        event.acceptProposedAction()
+        self.open_paths(paths)
+
+    def open_paths(self, paths: list[str]) -> None:
+        """Projektdateien öffnen, Datendateien hinzufügen."""
+        projects = [p for p in paths if p.lower().endswith(PROJECT_EXTENSION)]
+        data_files = [p for p in paths if not p.lower().endswith(PROJECT_EXTENSION)]
+        if projects:
+            self.open_project(projects[0])
+        if data_files:
+            self.add_files(data_files)
+
+    def choose_files(self, statistics: bool = False) -> None:
+        patterns = " ".join(f"*{ext}" for ext in CSV_EXTENSIONS + EXCEL_EXTENSIONS)
+        filters = (f"Messdaten ({patterns});;"
+                   f"CSV/Text ({' '.join('*' + e for e in CSV_EXTENSIONS)});;"
+                   f"Excel ({' '.join('*' + e for e in EXCEL_EXTENSIONS)});;"
+                   "Alle Dateien (*)")
+        title = "Dateien als Messwiederholungen laden" if statistics else "Dateien laden"
+        paths, _ = QFileDialog.getOpenFileNames(self, title, self._last_dir, filters)
+        if paths:
+            self._last_dir = str(Path(paths[0]).parent)
+            self.add_files(paths, statistics=statistics)
+
+    def add_files(self, paths: list[str], statistics: bool = False) -> None:
         errors: list[str] = []
         notes: list[str] = []
-        added = 0
+        first_new = len(self.datasets)
         for path in paths:
             name = Path(path).name
             if not is_supported(path):
@@ -421,24 +515,25 @@ class MainWindow(QMainWindow):
                 continue
             try:
                 table = read_table(path)
-                spec = default_spec(path, table, statistics=self.stat_default_check.isChecked())
-                if self.import_dialog_check.isChecked():
+                spec = default_spec(path, table, statistics=statistics)
+                if self.act_import_dialog.isChecked():
                     dialog = ImportDialog(self, path, table, spec)
-                    if dialog.exec_() != QDialog.Accepted:
+                    if dialog.exec() != QDialog.DialogCode.Accepted:
                         continue
                     spec, table = dialog.spec(), dialog.table
                 result = load_datasets(spec, table)
             except LoadError as exc:
                 errors.append(f"{name}: {exc}")
                 continue
-
             if not result.datasets:
                 errors.append(f"{name}: keine gültigen Zahlendaten gefunden.")
                 continue
+            if any(d.spec and Path(d.spec.path) == Path(path) for d in self.datasets[:first_new]):
+                notes.append(f"{name}: Diese Datei war bereits geladen.")
             for ds in result.datasets:
                 ds.color = self._next_color()
                 self.datasets.append(ds)
-                added += 1
+            self._add_recent(path)
             if result.skipped_rows:
                 notes.append(f"{name}: {result.skipped_rows} Zeile(n) mit ungültigem X-Wert übersprungen.")
             if result.empty_columns:
@@ -446,160 +541,93 @@ class MainWindow(QMainWindow):
             if result.x_is_time:
                 notes.append(f"{name}: X-Werte sind Datum/Uhrzeit – dargestellt als Sekunden ab dem ersten Wert.")
 
-        if added:
-            self.rebuild_table()
-            self.plot(silent=True)
-        if errors or notes:
-            text = "\n".join(errors + ([""] if errors and notes else []) + notes)
-            if errors:
-                QMessageBox.warning(self, "Laden", text)
-            else:
-                QMessageBox.information(self, "Laden", text)
-
-    # ------------------------------------------------------------------ Einstellungen
-
-    def collect_settings(self) -> PlotSettings:
-        """Einstellungen aus der Oberfläche lesen. Raises ValueError mit allen ungültigen Feldern."""
-        errors = []
-        axes = {}
-        for key, box in (("x", self.x_box), ("y", self.y_box), ("y2", self.y2_box)):
-            try:
-                axes[key] = box.settings()
-            except ValueError as exc:
-                if key != "y2" or self.y2_check.isChecked():
-                    errors.append(str(exc))
-                axes[key] = None
+        if len(self.datasets) > first_new:
+            self.model.refresh()
+            self.list_view.select_rows(list(range(first_new, len(self.datasets))))
+            self._selection_changed()
+            self.replot()
         if errors:
-            raise ValueError("\n".join(errors))
-        settings = PlotSettings(
-            y2_enabled=self.y2_check.isChecked(),
-            title=self.title_edit.text(),
-            label_fontsize=self.label_size.value(),
-            tick_fontsize=self.tick_size.value(),
-            legend_fontsize=self.legend_size.value(),
-            legend_loc=self.legend_combo.currentData(),
-            grid=self.grid_check.isChecked(),
-            minor_ticks=self.minor_check.isChecked(),
-            error_mode=self.error_mode_combo.currentData(),
-            stat_style=self.stat_style_combo.currentData(),
-        )
-        settings.x, settings.y = axes["x"], axes["y"]
-        if axes["y2"] is not None:
-            settings.y2 = axes["y2"]
-        return settings
+            QMessageBox.warning(self, "Laden", "\n".join(errors + ([""] + notes if notes else [])))
+        elif notes:
+            QMessageBox.information(self, "Laden", "\n".join(notes))
 
-    def apply_settings(self, s: PlotSettings) -> None:
-        self.x_box.set_settings(s.x)
-        self.y_box.set_settings(s.y)
-        self.y2_box.set_settings(s.y2)
-        self.y2_check.setChecked(s.y2_enabled)
-        self.title_edit.setText(s.title)
-        self.label_size.setValue(int(s.label_fontsize))
-        self.tick_size.setValue(int(s.tick_fontsize))
-        self.legend_size.setValue(int(s.legend_fontsize))
-        for combo, value in ((self.legend_combo, s.legend_loc), (self.error_mode_combo, s.error_mode),
-                             (self.stat_style_combo, s.stat_style)):
-            index = combo.findData(value)
-            if index >= 0:
-                combo.setCurrentIndex(index)
-        self.grid_check.setChecked(s.grid)
-        self.minor_check.setChecked(s.minor_ticks)
+    # ================================================================== Plotten
 
-    # ------------------------------------------------------------------ Plotten
+    def schedule(self) -> None:
+        """Live-Vorschau: kurz nach der letzten Änderung neu zeichnen."""
+        if not self._loading:
+            self._timer.start()
 
-    def plot(self, silent: bool = False) -> bool:
-        """Plot neu zeichnen. Mit ``silent`` werden keine Dialoge angezeigt."""
+    def replot(self) -> bool:
+        self._timer.stop()
         if not self.datasets:
-            if not silent:
-                QMessageBox.warning(self, "Plot", "Bitte zuerst Dateien laden.")
+            self.plot_view.show_message(EMPTY_HINT)
+            self._has_plot = False
+            self.axes_panel.set_auto({})
+            self._set_status("Keine Daten geladen.", [])
             return False
         try:
             settings = self.collect_settings()
         except ValueError as exc:
-            if not silent:
-                QMessageBox.warning(self, "Ungültige Eingaben", f"Bitte diese Felder korrigieren:\n\n{exc}")
-            self.statusBar().showMessage("Ungültige Eingaben – rot markierte Felder korrigieren.")
+            self.warning_label.setText("⚠ Ungültige Eingabe – rot markierte Felder korrigieren")
+            self.warning_label.setToolTip(str(exc))
             return False
-
-        # Für die Legende, die die Matplotlib-Toolbar bei Bearbeitung neu erzeugt
-        matplotlib.rcParams["legend.fontsize"] = settings.legend_fontsize
         try:
-            result = render(self.fig, self.datasets, settings)
+            result = render(self.plot_view.figure, self.datasets, settings)
         except PlotError as exc:
-            self.fig.clear()
-            self.canvas.draw()
+            self.plot_view.show_message(str(exc).splitlines()[0])
             self._has_plot = False
-            if not silent:
-                QMessageBox.warning(self, "Plot", str(exc))
-            self.statusBar().showMessage(str(exc).splitlines()[0])
+            self._set_status("", str(exc).splitlines()[1:])
             return False
-
-        self.canvas.draw()
-        self.toolbar.update()  # Zoom-Verlauf zurücksetzen
+        self.plot_view.after_render()
         self._has_plot = True
-        self.x_box.set_auto(result.limits.get("x"))
-        self.y_box.set_auto(result.limits.get("y"))
-        self.y2_box.set_auto(result.limits.get("y2"))
-
+        self.axes_panel.set_auto(result.limits)
         visible = [d for d in self.datasets if d.visible]
-        points = sum(d.n_points for d in visible)
-        message = f"{len(visible)} von {len(self.datasets)} Datensätzen dargestellt, {points} Punkte."
-        if result.warnings:
-            message += f" {len(result.warnings)} Hinweis(e)."
-            if not silent:
-                QMessageBox.information(self, "Hinweise zum Plot", "\n".join(result.warnings))
-        self.statusBar().showMessage(message)
+        points = f"{sum(d.n_points for d in visible):,}".replace(",", ".")
+        self._set_status(f"{len(visible)} von {len(self.datasets)} Datensätzen · {points} Punkte",
+                         result.warnings)
         return True
 
-    # ------------------------------------------------------------------ Export
+    def _set_status(self, summary: str, warnings: list[str]) -> None:
+        self._summary = summary
+        self.status_label.setText(summary)
+        warnings = [w for w in warnings if w]
+        self.warning_label.setText(f"⚠ {len(warnings)} Hinweis(e) – Maus hierher für Details" if warnings else "")
+        self.warning_label.setToolTip("\n".join(warnings))
 
-    def export_plot(self) -> None:
-        if not self._has_plot:
-            QMessageBox.warning(self, "Export", "Bitte zuerst einen Plot erstellen.")
-            return
+    def _measured(self, text: str) -> None:
+        self.status_label.setText(text or self._summary)
+
+    # ================================================================== Export
+
+    def _settings_or_warn(self) -> Optional[PlotSettings]:
         try:
-            settings = self.collect_settings()
+            return self.collect_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Ungültige Eingaben", f"Bitte diese Felder korrigieren:\n\n{exc}")
-            return
+            return None
 
+    def export(self) -> None:
+        if not self._has_plot:
+            QMessageBox.warning(self, "Export", "Es gibt noch keinen Plot zum Exportieren.")
+            return
+        settings = self._settings_or_warn()
+        if settings is None:
+            return
         filters = ";;".join(f for f, _ in EXPORT_FILTERS)
-        path, chosen = QFileDialog.getSaveFileName(self, "Plot exportieren", self._last_dir, filters)
+        suggested = str(Path(self._last_dir) / (Path(self._project_path).stem if self._project_path else "plot"))
+        path, chosen = QFileDialog.getSaveFileName(self, "Plot exportieren", suggested, filters)
         if not path:
             return
         ext = normalize_extension(path)
         if ext not in FORMATS:
-            ext = next((e for f, e in EXPORT_FILTERS if f == chosen), "png")
+            ext = next((e for f, e in EXPORT_FILTERS if f == chosen), "pdf")
             path += f".{ext}"
         self._last_dir = str(Path(path).parent)
 
-        width_cm = self.fig.get_figwidth() * 2.54
-        height_cm = self.fig.get_figheight() * 2.54
-        dialog = ExportDialog(
-            self,
-            width_cm=self._export["width_cm"] if not self._export["use_window"] else round(width_cm, 1),
-            height_cm=self._export["height_cm"] if not self._export["use_window"] else round(height_cm, 1),
-            dpi=self._export["dpi"],
-            use_window=self._export["use_window"],
-            rasterize=False,
-            vector_format=is_vector(ext),
-        )
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        values = dialog.values()
-        self._export.update({k: values[k] for k in ("use_window", "width_cm", "height_cm", "dpi")})
-
-        if values["use_window"]:
-            size = (self.fig.get_figwidth(), self.fig.get_figheight())
-        else:
-            size = (values["width_cm"] / 2.54, values["height_cm"] / 2.54)
-        options = ExportOptions(width_in=size[0], height_in=size[1], dpi=values["dpi"],
-                                reduce_data=values["reduce_data"], thin_markers=values["thin_markers"],
-                                marker_limit=values["marker_limit"], editable_text=values["editable_text"],
-                                rasterize=values["rasterize"])
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result = export_plot(path, self.datasets, settings, options)
+            result = export_plot(path, self.datasets, settings, options_from_settings(settings.export))
         except (PlotError, OSError, ValueError) as exc:
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Fehler beim Export", str(exc))
@@ -608,37 +636,67 @@ class MainWindow(QMainWindow):
 
         size_kb = Path(path).stat().st_size / 1024
         size_text = f"{size_kb / 1024:.1f} MB" if size_kb > 1024 else f"{size_kb:.0f} KB"
-        message = f"Plot exportiert ({size_text}):\n{path}"
+        message = f"Plot exportiert ({size_text}, {settings.export.width_cm:g} × {settings.export.height_cm:g} cm):\n{path}"
         if result.reductions:
             message += "\n\nDatenreduktion:\n" + "\n".join(result.reductions)
         QMessageBox.information(self, "Export", message)
 
-    # ------------------------------------------------------------------ Projekt
+    def copy_plot(self) -> None:
+        if not self._has_plot:
+            self.statusBar().showMessage("Es gibt noch keinen Plot zum Kopieren.", 4000)
+            return
+        settings = self._settings_or_warn()
+        if settings is None:
+            return
+        options = options_from_settings(settings.export)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            png = export_bytes("png", self.datasets, settings, options)
+            svg = export_bytes("svg", self.datasets, settings, options)
+        except (PlotError, ValueError) as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Kopieren", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+        mime = QMimeData()
+        mime.setImageData(QImage.fromData(png, "PNG"))
+        mime.setData("image/png", QByteArray(png))
+        mime.setData("image/svg+xml", QByteArray(svg))
+        QApplication.clipboard().setMimeData(mime)
+        e = settings.export
+        self.statusBar().showMessage(f"Plot kopiert ({e.width_cm:g} × {e.height_cm:g} cm, {e.dpi} dpi) – "
+                                     "in Word/PowerPoint mit Strg+V einfügen.", 6000)
 
-    def save_project(self) -> None:
+    # ================================================================== Projekt
+
+    def save_project(self, save_as: bool = False) -> None:
         if not self.datasets:
             QMessageBox.information(self, "Projekt speichern", "Es sind keine Datensätze geladen.")
             return
-        try:
-            settings = self.collect_settings()
-        except ValueError as exc:
-            QMessageBox.warning(self, "Ungültige Eingaben", f"Bitte diese Felder korrigieren:\n\n{exc}")
+        settings = self._settings_or_warn()
+        if settings is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Projekt speichern", self._last_dir,
-                                              f"Graph-Plotter-Projekt (*{PROJECT_EXTENSION})")
-        if not path:
-            return
-        if not path.lower().endswith(PROJECT_EXTENSION):
-            path += PROJECT_EXTENSION
+        path = self._project_path
+        if save_as or not path:
+            suggested = path or str(Path(self._last_dir) / f"Projekt{PROJECT_EXTENSION}")
+            path, _ = QFileDialog.getSaveFileName(self, "Projekt speichern", suggested,
+                                                  f"Graph-Plotter-Projekt (*{PROJECT_EXTENSION})")
+            if not path:
+                return
+            if not path.lower().endswith(PROJECT_EXTENSION):
+                path += PROJECT_EXTENSION
         try:
             save_project(path, self.datasets, settings)
         except OSError as exc:
             QMessageBox.critical(self, "Projekt speichern", f"Speichern fehlgeschlagen: {exc}")
             return
+        self._project_path = path
         self._last_dir = str(Path(path).parent)
-        self.statusBar().showMessage(f"Projekt gespeichert: {path}")
+        self._add_recent(path)
+        self._update_title()
+        self.statusBar().showMessage(f"Projekt gespeichert: {path}", 5000)
 
-    def open_project(self, path: str | None = None) -> None:
+    def open_project(self, path: Optional[str] = None) -> None:
         if not path:
             path, _ = QFileDialog.getOpenFileName(self, "Projekt öffnen", self._last_dir,
                                                   f"Graph-Plotter-Projekt (*{PROJECT_EXTENSION})")
@@ -646,19 +704,22 @@ class MainWindow(QMainWindow):
                 return
         if self.datasets and QMessageBox.question(
                 self, "Projekt öffnen",
-                "Die aktuell geladenen Datensätze werden ersetzt. Fortfahren?") != QMessageBox.Yes:
+                "Die aktuell geladenen Datensätze werden ersetzt. Fortfahren?") != QMessageBox.StandardButton.Yes:
             return
         try:
             project = load_project(path)
         except LoadError as exc:
             QMessageBox.critical(self, "Projekt öffnen", str(exc))
             return
+        self._project_path = path
         self._last_dir = str(Path(path).parent)
-        self.datasets = project.datasets
-        self.apply_settings(project.settings)
-        self.rebuild_table()
-        self.plot(silent=True)
-        self.setWindowTitle(f"Graph Plotter (v{VERSION}) – {Path(path).name}")
+        self.datasets[:] = project.datasets  # Liste bleibt dieselbe (das Modell hält sie)
+        self.model.refresh()
+        self.load_settings(project.settings)
+        self._selection_changed()
+        self._add_recent(path)
+        self._update_title()
+        self.replot()
         if project.problems:
             QMessageBox.warning(self, "Projekt öffnen", "Nicht alles konnte geladen werden:\n\n"
                                 + "\n".join(project.problems))

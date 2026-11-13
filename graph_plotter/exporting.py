@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import matplotlib
 from matplotlib.figure import Figure
 
 from .model import Dataset
-from .plotting import PlotSettings, RenderResult, export_rc, render
+from .plotting import ExportSettings, PlotSettings, RenderResult, export_rc, render
 from .reduction import Reduction
 
 # Endung -> (Beschreibung, Vektorformat)
@@ -37,6 +38,13 @@ class ExportOptions:
     rasterize: bool = False       # Datenlinien als Bild einbetten (Notlösung)
 
 
+def options_from_settings(settings: ExportSettings) -> ExportOptions:
+    return ExportOptions(width_in=settings.width_cm / 2.54, height_in=settings.height_cm / 2.54,
+                         dpi=int(settings.dpi), reduce_data=settings.reduce_data,
+                         thin_markers=settings.thin_markers, marker_limit=int(settings.marker_limit),
+                         editable_text=settings.editable_text, rasterize=settings.rasterize)
+
+
 def normalize_extension(path: str) -> str:
     ext = Path(path).suffix.lower().lstrip(".")
     return {"jpeg": "jpg", "tif": "tiff"}.get(ext, ext)
@@ -46,14 +54,26 @@ def is_vector(ext: str) -> bool:
     return FORMATS.get(ext, ("", False))[1]
 
 
-def export_plot(path: str, datasets: list[Dataset], settings: PlotSettings,
-                options: ExportOptions) -> RenderResult:
+def export_bytes(fmt: str, datasets: list[Dataset], settings: PlotSettings,
+                 options: ExportOptions) -> bytes:
+    """Plot in ein Format exportieren und als Bytes liefern (z. B. für die Zwischenablage)."""
+    buffer = io.BytesIO()
+    export_plot(buffer, datasets, settings, options, fmt=fmt)
+    return buffer.getvalue()
+
+
+def export_plot(path, datasets: list[Dataset], settings: PlotSettings,
+                options: ExportOptions, fmt: str | None = None) -> RenderResult:
     """Plot neu (mit fester Größe) zeichnen und speichern.
+
+    Args:
+        path: Dateipfad oder beschreibbares Dateiobjekt (dann ist ``fmt`` nötig).
+        fmt: Dateiformat; ohne Angabe aus der Dateiendung.
 
     Raises:
         PlotError, OSError, ValueError
     """
-    ext = normalize_extension(path)
+    ext = fmt or normalize_extension(str(path))
     if ext not in FORMATS:
         raise ValueError(f"Unbekanntes Dateiformat: .{ext}")
     vector = is_vector(ext)

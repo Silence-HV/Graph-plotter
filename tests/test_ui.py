@@ -1,21 +1,24 @@
-"""Rauchtests der Oberfläche (ohne sichtbares Fenster)."""
+"""Tests der Oberfläche (ohne sichtbares Fenster)."""
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PyQt5")
+os.environ.setdefault("QT_API", "pyside6")
+pytest.importorskip("PySide6")
 
 import matplotlib  # noqa: E402
 
-matplotlib.use("Qt5Agg")
+matplotlib.use("QtAgg")
 
-from PyQt5.QtWidgets import QApplication, QDialog  # noqa: E402
+from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from graph_plotter.loaders import default_spec, read_table  # noqa: E402
 from graph_plotter.ui import main_window as mw  # noqa: E402
-from graph_plotter.ui.dialogs import ImportDialog  # noqa: E402
+from graph_plotter.ui.import_dialog import ImportDialog  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -24,13 +27,14 @@ def app():
 
 
 @pytest.fixture
-def window(app, monkeypatch):
-    # Dialoge nicht blockieren lassen
+def window(app, tmp_path, monkeypatch):
     for name in ("warning", "information", "critical"):
         monkeypatch.setattr(mw.QMessageBox, name, staticmethod(lambda *a, **k: None))
-    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.Yes))
-    win = mw.MainWindow()
-    win.import_dialog_check.setChecked(False)
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.Yes))
+    store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    win = mw.MainWindow(store)
+    win.act_import_dialog.setChecked(False)
     yield win
     win.close()
 
@@ -42,74 +46,152 @@ def csv_file(tmp_path):
     return str(path)
 
 
-def test_load_plot_remove(window, csv_file):
-    window.add_files([csv_file])
-    assert len(window.datasets) == 3
-    assert window._has_plot
-    assert len({d.color for d in window.datasets}) == 3
+def test_empty_state(window):
+    assert not window._has_plot
+    assert "hierher ziehen" in window.plot_view.figure.texts[0].get_text()
 
-    # eigene Labels/Farben bleiben beim Entfernen am richtigen Datensatz (F4/F5)
+
+def test_load_plots_immediately_and_keeps_styles_on_remove(window, csv_file):
+    window.add_files([csv_file])
+    assert len(window.datasets) == 3 and window._has_plot
+    assert len({d.color for d in window.datasets}) == 3
     window.datasets[2].label = "Dritte"
     window.datasets[2].color = "#000000"
-    window.table.selectRow(0)
+    window.list_view.select_rows([0])
     window.remove_selected()
-    assert [d.display_label for d in window.datasets][-1] == "Dritte"
+    assert window.datasets[-1].display_label == "Dritte"
     assert window.datasets[-1].color == "#000000"
-    assert window.table.rowCount() == 2
+    assert window.model.rowCount() == 2
 
 
-def test_invalid_input_blocks_plot(window, csv_file):
+def test_live_update_and_invalid_input(window, csv_file):
     window.add_files([csv_file])
-    window.x_box.min_edit.setText("abc")
-    assert not window.plot(silent=True)
-    window.x_box.min_edit.setText("0,5")
-    assert window.plot(silent=True)
-    assert window.fig.axes[0].get_xlim()[0] == 0.5
+    window.appearance.title.setText("Versuch")
+    assert window._timer.isActive()
+    assert window.replot()
+    assert window.plot_view.figure.axes[0].get_title() == "Versuch"
+
+    window.axes_panel.x.min_edit.setText("abc")
+    assert not window.replot()
+    assert "Ungültige Eingabe" in window.warning_label.text()
+    window.axes_panel.x.min_edit.setText("0,5")
+    assert window.replot()
+    assert window.plot_view.figure.axes[0].get_xlim()[0] == 0.5
 
 
-def test_statistics_y2_and_fit(window, csv_file):
-    window.stat_default_check.setChecked(True)
+def test_editor_applies_to_all_selected(window, csv_file):
     window.add_files([csv_file])
-    window.stat_default_check.setChecked(False)
+    window.list_view.select_rows([0, 2])
+    window.editor.draw.setCurrentIndex(window.editor.draw.findData("marker"))
+    assert [d.draw for d in window.datasets] == ["marker", "line+marker", "marker"]
+    assert not window.editor.label_edit.isEnabled()  # Legende nur bei einem Datensatz
+    window.list_view.select_rows([1])
+    window.editor.label_edit.setText("Mitte")
+    assert window.datasets[1].label == "Mitte"
+
+
+def test_visibility_toggle_from_list(window, csv_file):
     window.add_files([csv_file])
-    window.y2_check.setChecked(True)
+    window.model.toggle_visible(0)
+    window.replot()
+    assert "2 von 3" in window.status_label.text()
+
+
+def test_statistics_y2_fit(window, csv_file):
+    window.add_files([csv_file], statistics=True)
+    window.add_files([csv_file])
+    assert window.datasets[0].is_statistics
+    window.axes_panel.y2_check.setChecked(True)
     window.datasets[1].axis = "Y2"
     window.datasets[0].fit = "linear"
-    assert window.plot(silent=True)
-    assert len(window.fig.axes) == 2
+    assert window.replot()
+    assert len(window.plot_view.figure.axes) == 2
+    legend = window.plot_view.figure.axes[1].get_legend()
+    assert any(t.get_text().startswith("Fit:") for t in legend.get_texts())
 
 
 def test_move_rows(window, csv_file):
     window.add_files([csv_file])
     first = window.datasets[0]
-    window.table.selectRow(0)
+    window.list_view.select_rows([0])
     window.move_selected(1)
     assert window.datasets[1] is first
-    assert window._selected_rows() == [1]
+    assert window.list_view.selected_rows() == [1]
 
 
-def test_export_and_project(window, csv_file, tmp_path, monkeypatch):
+def test_presets(window, csv_file):
+    window.add_files([csv_file])
+    index = window.preset_combo.findData("paper1")
+    window.preset_combo.setCurrentIndex(index)
+    window._preset_chosen(index)
+    settings = window.collect_settings()
+    assert settings.label_fontsize == 9 and settings.export.width_cm == 8.5
+    window.appearance.label_size.setValue(20)
+    assert window.preset_combo.currentData() is None  # „Benutzerdefiniert“
+
+
+def test_export_copy_and_project(window, csv_file, tmp_path, monkeypatch):
     window.add_files([csv_file])
     window.datasets[0].label = "Kanal A"
-    window.title_edit.setText("Versuch 1")
-    window.y_box.prefix.setCurrentIndex(window.y_box.prefix.findData("m (milli)"))
+    window.appearance.title.setText("Versuch 1")
+    window.axes_panel.y.prefix.setCurrentIndex(window.axes_panel.y.prefix.findData("m (milli)"))
+    window.export_panel.width.setValue(12)
 
     target = str(tmp_path / "plot")
     monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",
-                        staticmethod(lambda *a, **k: (target, mw.EXPORT_FILTERS[0][0])))  # PDF
-    monkeypatch.setattr(mw.ExportDialog, "exec_", lambda self: QDialog.Accepted)
-    window.export_plot()
-    assert (tmp_path / "plot.pdf").stat().st_size > 0
+                        staticmethod(lambda *a, **k: (target, mw.EXPORT_FILTERS[1][0])))  # SVG
+    window.export()
+    svg = (tmp_path / "plot.svg").read_text(encoding="utf-8")
+    assert 'width="340.157' in svg  # 12 cm = 340,16 pt
+    assert "Kanal A" in svg
+
+    window.copy_plot()
+    mime = QApplication.clipboard().mimeData()
+    assert mime.hasImage() and mime.hasFormat("image/svg+xml")
+    # Die Offscreen-Plattform der Tests stürzt beim Beenden mit gefüllter Zwischenablage ab
+    # (die echte Windows-Plattform nicht) – daher leeren.
+    QApplication.clipboard().clear()
 
     project = str(tmp_path / "proj.gplot")
     monkeypatch.setattr(mw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (project, "")))
     window.save_project()
+    assert window.windowTitle().startswith("proj.gplot")
+
     window.datasets.clear()
-    window.title_edit.setText("")
+    window.model.refresh()
+    window.appearance.title.setText("")
     window.open_project(project)
     assert window.datasets[0].label == "Kanal A"
-    assert window.title_edit.text() == "Versuch 1"
-    assert window.y_box.prefix.currentData() == "m (milli)"
+    assert window.appearance.title.text() == "Versuch 1"
+    assert window.axes_panel.y.prefix.currentData() == "m (milli)"
+    assert window.export_panel.width.value() == 12
+    assert project.replace("/", "\\").lower() in [p.lower() for p in window._recent()]
+
+
+def test_measurement(window, csv_file):
+    window.add_files([csv_file])
+    view = window.plot_view
+    texts = []
+    view.measured.connect(texts.append)
+    view._set_mode("measure")
+    ax = view.figure.axes[0]
+    view.canvas.draw()
+    for x, y in ((0, 1.0), (2, 3.0)):
+        px, py = ax.transData.transform((x, y))
+        view._on_click(SimpleNamespace(x=px, y=py, inaxes=ax, button=1))
+    assert "Δx = 2" in texts[-1] and "Δy = 2" in texts[-1]
+    view._set_mode("measure")  # ausschalten löscht die Messung
+    assert texts[-1] == ""
+
+
+def test_page_mode_and_theme(window, csv_file):
+    window.add_files([csv_file])
+    window.plot_view.set_page_mode(True)
+    assert window.plot_view.canvas.width() == round(16 / 2.54 * 100)
+    window.plot_view.set_page_mode(False)
+    window.set_theme("dark")
+    assert window.store.value("theme") == "dark"
+    window.set_theme("light")
 
 
 def test_import_dialog(app, tmp_path):
@@ -119,7 +201,6 @@ def test_import_dialog(app, tmp_path):
     dialog = ImportDialog(None, str(path), table, default_spec(str(path), table))
     spec = dialog.spec()
     assert (spec.header_row, spec.data_start, spec.y_cols) == (1, 2, [1, 2])
-    # X-Spalte wechseln: die X-Spalte wird aus der Y-Auswahl ausgeblendet
     dialog.x_combo.setCurrentIndex(1)
     assert dialog.spec().y_cols == [0, 2]
     dialog.header_spin.setValue(0)

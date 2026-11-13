@@ -86,34 +86,55 @@ class AxisSettings:
 
 
 @dataclass
+class ExportSettings:
+    """Größe und Optionen für den Export (werden im Projekt gespeichert)."""
+
+    width_cm: float = 16.0
+    height_cm: float = 10.0
+    dpi: int = 300
+    reduce_data: bool = True
+    thin_markers: bool = True
+    marker_limit: int = 250
+    editable_text: bool = True
+    rasterize: bool = False
+
+
+def _from_fields(cls, data: dict):
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
+
+
+@dataclass
 class PlotSettings:
     x: AxisSettings = field(default_factory=AxisSettings)
     y: AxisSettings = field(default_factory=AxisSettings)
     y2: AxisSettings = field(default_factory=AxisSettings)
     y2_enabled: bool = False
     title: str = ""
-    label_fontsize: float = 30
-    tick_fontsize: float = 24
-    legend_fontsize: float = 30
+    label_fontsize: float = 14
+    tick_fontsize: float = 12
+    legend_fontsize: float = 12
     legend_loc: str = "best"
     grid: bool = True
     minor_ticks: bool = False
     error_mode: str = "sd"
     stat_style: str = "errorbar"
+    export: ExportSettings = field(default_factory=ExportSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "PlotSettings":
-        axis_fields = {f.name for f in fields(AxisSettings)}
         own_fields = {f.name for f in fields(cls)}
         kwargs = {}
         for key, value in data.items():
             if key not in own_fields:
                 continue
             if key in ("x", "y", "y2") and isinstance(value, dict):
-                value = AxisSettings(**{k: v for k, v in value.items() if k in axis_fields})
+                value = _from_fields(AxisSettings, value)
+            elif key == "export" and isinstance(value, dict):
+                value = _from_fields(ExportSettings, value)
             kwargs[key] = value
         return cls(**kwargs)
 
@@ -365,18 +386,19 @@ def _render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
                             markerfacecolor=color if ds.marker_filled else "white",
                             markeredgecolor=color)
 
+        gid = f"data-{e.index}"  # Kennung für die Messfunktion der Oberfläche
         if marker_idx is None and len(line_x) == n:
-            artist, = target.plot(x, y, label=e.legend_label, rasterized=rasterize,
+            artist, = target.plot(x, y, label=e.legend_label, rasterized=rasterize, gid=gid,
                                   **line_style, **marker_style)
             handles.append(artist)
         else:
             # Linie und Marker getrennt zeichnen; die Legende bekommt ein kombiniertes Symbol.
             if draw_line:
-                target.plot(line_x, line_y, rasterized=rasterize, **line_style)
+                target.plot(line_x, line_y, rasterized=rasterize, gid=gid, **line_style)
             if draw_marker:
                 mx, my = (x, y) if marker_idx is None else (x[marker_idx], y[marker_idx])
-                target.plot(mx, my, rasterized=rasterize, color=color, linestyle="none",
-                            alpha=alpha, **{k: v for k, v in marker_style.items()})
+                target.plot(mx, my, rasterized=rasterize, gid=gid, color=color, linestyle="none",
+                            alpha=alpha, **marker_style)
             proxy = Line2D([], [], label=e.legend_label, **line_style, **marker_style)
             handles.append(proxy)
         result.plotted += 1

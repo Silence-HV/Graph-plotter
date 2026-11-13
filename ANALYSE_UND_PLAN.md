@@ -1,6 +1,6 @@
 # Graph Plotter – Analyse und Verbesserungsplan
 
-Stand: 13.11.2026, Basis: v1.8 (Commit `6f911a1`)
+Stand: 13.11.2026, Basis: v1.8 (Commit `6f911a1`), aktueller Stand: v3.0
 
 Dieses Dokument fasst die Code-Analyse des Graph Plotters zusammen, listet die gefundenen Fehler und
 alle Verbesserungsvorschläge auf und hält fest, welche davon umgesetzt sind.
@@ -60,7 +60,7 @@ Legende Status: ✅ umgesetzt · ⏳ offen
 | B11 | Importdialog mit Vorschau, Wahl der X-Spalte und der Y-Spalten | ✅ |
 | B12 | Datum/Uhrzeit als X-Werte | ✅ (als Sekunden ab erstem Wert) |
 | B13 | Mehrere Dateien auf einmal öffnen, Drag & Drop auf das ganze Fenster | ✅ |
-| B14 | Warnung beim doppelten Laden einer Datei | ⏳ |
+| B14 | Warnung beim doppelten Laden einer Datei | ✅ (v3.0, Hinweis) |
 | – | CSV mit Semikolon/Tab, Dezimalkomma, Windows-Kodierung (cp1252) | ✅ |
 
 ### C. Bedienung
@@ -68,11 +68,11 @@ Legende Status: ✅ umgesetzt · ⏳ offen
 | # | Vorschlag | Status |
 |---|-----------|--------|
 | C15 | Einstellungsbereich scrollbar (kleine Bildschirme) | ✅ |
-| C16 | Einstellungen zwischen Programmstarts merken (`QSettings`) | ⏳ |
+| C16 | Einstellungen zwischen Programmstarts merken (`QSettings`) | ✅ teilweise (v3.0: Fenster, Farbschema, letzter Ordner, zuletzt geöffnet, Importdialog; Plot-Einstellungen über Projektdatei) |
 | C17 | Projektdatei (JSON) mit Dateien und allen Plot-Einstellungen | ✅ |
 | C18 | Datensätze ein-/ausblenden, Reihenfolge ändern, „Alle entfernen“, Mehrfachauswahl | ✅ |
-| C19 | Automatisches Neuzeichnen bei Änderungen | ⏳ |
-| C20 | Messwert-Cursor (X/Y am Mauszeiger, ΔX/ΔY) | ⏳ |
+| C19 | Automatisches Neuzeichnen bei Änderungen | ✅ (v3.0, Live-Vorschau) |
+| C20 | Messwert-Cursor (X/Y am Mauszeiger, ΔX/ΔY) | ✅ (v3.0) |
 | C21 | High-DPI-Unterstützung | ✅ |
 
 ### D. Darstellung
@@ -84,7 +84,7 @@ Legende Status: ✅ umgesetzt · ⏳ offen
 | D24 | Titel, Raster an/aus, Nebenticks, Legende außerhalb | ✅ |
 | D25 | Statistik als Fehlerbalken oder Band | ✅ |
 | D26 | Farbenblind-taugliche Standardpalette (`tab10`) | ✅ |
-| D27 | Legendenfehler bei Y2 + Toolbar-Bearbeitung beheben statt nur warnen | ⏳ |
+| D27 | Legendenfehler bei Y2 + Toolbar-Bearbeitung beheben statt nur warnen | ✅ (v3.0: fehleranfälliger Toolbar-Dialog entfällt, alles über die Eigenschaften-Tabs) |
 
 ### E. Auswertung
 
@@ -113,36 +113,51 @@ Legende Status: ✅ umgesetzt · ⏳ offen
 3. **Schritt 3 – Funktionen:** Importdialog (B9–B13), Projektdatei (C17), Darstellung pro Datensatz und
    Log-Achsen (D22–D26), Kurvenanpassung (E28). ✅
 
-Offene Punkte für eine spätere Version: B14, C16, C19, C20, D27, E29–E31, F34 (Icon), F35.
+4. **Schritt 4 – Vektorexport (v2.1):** siehe Abschnitt 7. ✅
+5. **Schritt 5 – Neue Oberfläche (v3.0):** siehe Abschnitt 8. ✅
+
+Noch offen: E29–E31, F34 (Icon), F35, Plot-Einstellungen ohne Projektdatei merken (Rest von C16),
+Dezimalkomma in den Achsenbeschriftungen des Plots, Drag & Drop zum Umsortieren der Datenliste.
 
 ---
 
-## 5. Neue Projektstruktur (v2.0)
+## 5. Projektstruktur (v3.0)
 
 ```
 Plotter.py                 Startpunkt (wird auch von build_exe.py verwendet)
 graph_plotter/
   __init__.py              VERSION
+  app.py                   Programmstart, Fehlerdialog, Logdatei
   numparse.py              Zahlen-Parser (deutsch/englisch, E-Notation)
-  loaders.py               CSV/Excel einlesen, Kopfzeilen-Erkennung, ImportSpec
-  model.py                 Datensatz (Daten + Darstellungsoptionen)
+  loaders.py               CSV/Excel einlesen, Kopfzeilen-Erkennung
+  model.py                 ImportSpec und Datensatz (Daten + Darstellungsoptionen)
   stats.py                 Mittelwert, SD/SEM/95-%-KI
   fitting.py               Kurvenanpassung
-  plotting.py              Zeichnen (ohne Qt, testbar)
+  reduction.py             Datenreduktion für den Export (Min/Max, Marker ausdünnen)
+  plotting.py              Zeichnen und alle Plot-/Export-Einstellungen (ohne Qt, testbar)
+  exporting.py             Export in Dateien und Bytes (Zwischenablage)
+  presets.py               Vorlagen (Bildschirm, Paper, Abschlussarbeit, Präsentation)
   project.py               Projektdatei speichern/laden
-  ui/                      Hauptfenster, Importdialog, Stil- und Exportdialog
-tests/                     pytest-Tests
+  ui/                      Oberfläche (PySide6)
+    main_window.py         Hauptfenster, Live-Vorschau, Laden/Speichern/Export
+    dataset_list.py        Datenliste links (Modell + gezeichnete Zeilen)
+    panels.py              Tabs rechts: Datensatz, Achsen, Darstellung, Export
+    plot_view.py           Plot, Navigation, Seitenansicht, Messfunktion
+    import_dialog.py       Importdialog mit Vorschau
+    widgets.py             Eingabefelder, Farbknopf, einklappbare Abschnitte
+    theme.py, icons.py     Farbschema (hell/dunkel) und Symbole
+tests/                     pytest-Tests (Kern, Export, Oberfläche)
 requirements.txt           Laufzeit-Abhängigkeiten
 requirements-dev.txt       Zusätzlich für Tests und Build
 ```
 
-Tests ausführen: `.venv\Scripts\python -m pytest` (46 Tests, inkl. Oberflächen-Rauchtests ohne Fenster)
+Tests ausführen: `.venv\Scripts\python -m pytest` (74 Tests, Oberflächentests laufen ohne Fenster)
 Abhängigkeiten installieren: `.venv\Scripts\python -m pip install -r requirements-dev.txt`
-`.exe` bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter_v20.exe`
+`.exe` bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter_v30.exe`
 
 ---
 
-## 6. Bedienung in v2.0 – was sich geändert hat
+## 6. Bedienung in v2.0 (durch v3.0 teilweise ersetzt, siehe Abschnitt 8)
 
 - **Ein Button „Dateien laden…“** für CSV/Text und Excel (Mehrfachauswahl). Drag & Drop funktioniert im
   ganzen Fenster, auch für Projektdateien (`.gplot`). Dateien können auch per „Öffnen mit“ bzw. als
@@ -198,11 +213,69 @@ zeigt eine Meldung Dateigröße und was reduziert wurde.
 
 Export-Dauer jeweils unter 0,5 s.
 
+---
+
+## 8. Neue Oberfläche (v3.0)
+
+Technische Basis ist jetzt **Qt 6 über PySide6** statt PyQt5. Gründe: bessere Unterstützung für
+hochauflösende Bildschirme und den Windows-Dunkelmodus, und die LGPL-Lizenz ist bei der Weitergabe der
+`.exe` unkomplizierter als die GPL von PyQt5. Die `.exe` ist zudem kleiner (74 statt 92 MB).
+
+### Aufbau
+
+```
+┌ Öffnen ▾ │ Speichern ▾ │ Exportieren │ Kopieren │ Vorlage [Paper ▾]          Farbschema ▾ ┐
+├ DATEN  + − ˄ ˅ ┬ ⌂ ‹ › ✥ 🔍 ⌖ │ ▯          Export: 16 × 10 cm ┬ Datensatz│Achsen│Darstellung│Export ┤
+│ 👁 ● Kanal 1    │                                            │ einklappbare Abschnitte         │
+│ 👁 ● Kanal 2    │               Plot (live)                  │                                 │
+├────────────────┴────────────────────────────────────────────┴─────────────────────────────────┤
+│ 3 von 3 Datensätzen · 1.200 Punkte      ⚠ Hinweise                    x = 1,25  y = 0,93       │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Was neu ist
+
+- **Live-Vorschau:** Jede Änderung zeichnet nach 0,25 s neu, der Button „Plot erstellen“ entfällt.
+  Hinweise (z. B. ignorierte Grenzen) erscheinen in der Statusleiste statt als Dialog.
+- **Datenliste links:** Auge-Symbol zum Ein-/Ausblenden, Klick auf den Farbpunkt ändert die Farbe,
+  Infozeile mit Punktzahl, Wiederholungen, Y2 und Fit. Entf entfernt, Strg+↑/↓ verschiebt.
+- **Eigenschaften rechts in Tabs:** Datensatz, Achsen, Darstellung und Export, mit einklappbaren
+  Abschnitten. Änderungen im Tab „Datensatz“ gelten für **alle ausgewählten** Datensätze.
+- **Vorlagen** in der Werkzeugleiste: Bildschirm, Paper einspaltig (8,5 cm) und zweispaltig (17 cm),
+  Abschlussarbeit (15 cm), Präsentation 16:9. Sie setzen Schriftgrößen und Exportgröße.
+  Neue Standardschrift: 14/12/12 pt statt 30/24/30 pt.
+- **Seitenansicht** (Blatt-Symbol über dem Plot): zeigt den Plot in Exportgröße, also mit den echten
+  Größenverhältnissen von Schrift und Linien.
+- **Export ohne Zwischendialog:** Größe, Auflösung und Vektor-Optionen stehen im Tab „Export“ und werden
+  im Projekt gespeichert.
+- **Kopieren** (Strg+Umschalt+C): legt den Plot als PNG und SVG in die Zwischenablage, zum direkten
+  Einfügen in Word oder PowerPoint.
+- **Messen:** Fadenkreuz-Symbol, dann Messpunkte anklicken. Zwei Punkte ergeben Δx und Δy; Esc löscht.
+  Die Koordinaten unter dem Mauszeiger stehen immer rechts in der Statusleiste.
+- **Farbschema** hell, dunkel oder wie Windows; der Plot selbst bleibt wie im Export weiß.
+- **Gemerkt werden:** Fenstergröße und Aufteilung, Farbschema, letzter Ordner, zuletzt geöffnete Dateien
+  und Projekte (Menü am „Öffnen“-Knopf), Importdialog an/aus.
+- **Projekt speichern** merkt sich den Dateinamen (Strg+S speichert direkt, „Speichern unter…“ im Menü).
+- Der Bearbeitungsdialog der Matplotlib-Toolbar ist entfallen und damit auch der Legendenfehler bei Y2 (D27).
+
+### Tastenkürzel
+
+| Kürzel | Funktion |
+|--------|----------|
+| Strg+O | Dateien laden |
+| Strg+Umschalt+O | Projekt öffnen |
+| Strg+S / Strg+Umschalt+S | Projekt speichern / speichern unter |
+| Strg+E | Exportieren |
+| Strg+Umschalt+C | Plot kopieren |
+| Entf, Strg+↑/↓ | Datensatz entfernen / verschieben (in der Datenliste) |
+| Esc | Messung löschen (im Plot) |
+
 ### Bekannte Einschränkungen
 
-- Die Kurvenbearbeitung über die Matplotlib-Toolbar baut die Legende bei aktiver Y2-Achse ohne die
-  Y2-Einträge neu auf (D27). Danach einfach erneut „Plot erstellen“.
-- Einstellungen werden nur über Projektdateien gespeichert, nicht automatisch zwischen Programmstarts (C16).
+- Beim Ändern einer Einstellung wird neu gezeichnet; ein vorher eingestellter Zoom wird dabei
+  zurückgesetzt.
+- Die Datenliste lässt sich (noch) nicht per Drag & Drop umsortieren, sondern über ˄/˅ bzw. Strg+↑/↓.
+- Zahlen im Plot (Achsen, Fit-Gleichung) verwenden den Dezimalpunkt.
 - Die automatische Kopfzeilen-Erkennung verlangt zwei aufeinanderfolgende Zahlenzeilen; steht direkt
   nach der ersten Messzeile eine fehlerhafte Zeile, den Datenbeginn im Importdialog korrigieren.
 - Zahlen mit genau einem Trennzeichen gelten als Dezimalzahl: „1.000“ wird als 1,0 gelesen, nicht als 1000.
