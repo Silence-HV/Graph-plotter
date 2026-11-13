@@ -38,11 +38,15 @@ class _HiddenToolbar(NavigationToolbar2QT):
 class PlotView(QWidget):
     hover = Signal(str)       # Koordinaten unter dem Mauszeiger
     measured = Signal(str)    # Ergebnis der Messung
+    viewChanged = Signal(bool)  # True, wenn gezoomt/verschoben (Ansicht weicht vom Plot ab)
+    applyViewRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.label_lookup: Callable[[int], str] = lambda i: f"G{i + 1}"
         self._points: list[tuple[str, float, float, object]] = []
+        self._home: Optional[dict] = None
+        self._zoomed = False
         self._page_mode = False
         self._page_size = (16 / 2.54, 10 / 2.54)
 
@@ -66,6 +70,8 @@ class PlotView(QWidget):
             ("pan", "Verschieben (linke Maustaste) / Zoomen (rechte Maustaste)", True),
             ("zoom", "Rechteck-Zoom", True),
             ("measure", "Messen: Messpunkte anklicken (zwei Punkte ergeben Δx/Δy), Esc löscht", True),
+            ("crop", "Ausschnitt übernehmen: aktuellen Zoom als Achsengrenzen eintragen\n"
+                     "(bleibt beim Neuzeichnen erhalten und wird im Projekt gespeichert)", False),
             (None, None, None),
             ("page", "Seitenansicht: Plot in Exportgröße zeigen (echte Schriftgrößen)", True),
         ):
@@ -90,6 +96,8 @@ class PlotView(QWidget):
         self.buttons["zoom"].clicked.connect(lambda: self._set_mode("zoom"))
         self.buttons["measure"].clicked.connect(lambda: self._set_mode("measure"))
         self.buttons["page"].toggled.connect(self.set_page_mode)
+        self.buttons["crop"].clicked.connect(self.applyViewRequested)
+        self.buttons["crop"].setEnabled(False)
 
         self._holder = QWidget()
         self._grid = QGridLayout(self._holder)
@@ -149,12 +157,48 @@ class PlotView(QWidget):
         self.figure.text(0.5, 0.5, text, ha="center", va="center", color="#8a8f98", fontsize=13, wrap=True)
         self.canvas.draw_idle()
         self._reset_measurement()
+        self._home = None
+        self._set_zoomed(False)
 
-    def after_render(self) -> None:
-        """Nach dem Neuzeichnen: Zoom-Verlauf und Messung zurücksetzen."""
+    def after_render(self, limits: Optional[dict] = None) -> None:
+        """Nach dem Neuzeichnen: Zoom-Verlauf und Messung zurücksetzen, Ausgangsansicht merken."""
         self.canvas.draw_idle()
         self._nav.update()
         self._reset_measurement()
+        self._home = dict(limits) if limits else self.view_limits()
+        for ax in self.figure.axes:
+            ax.callbacks.connect("xlim_changed", self._limits_changed)
+            ax.callbacks.connect("ylim_changed", self._limits_changed)
+        self._set_zoomed(False)
+
+    # ------------------------------------------------------------------ Ausschnitt
+
+    def view_limits(self) -> dict:
+        """Aktuell sichtbarer Bereich: "x", "y" und ggf. "y2" -> (min, max)."""
+        axes = self.figure.axes
+        if not axes:
+            return {}
+        view = {"x": tuple(axes[0].get_xlim()), "y": tuple(axes[0].get_ylim())}
+        if len(axes) > 1:
+            view["y2"] = tuple(axes[1].get_ylim())
+        return view
+
+    def is_zoomed(self) -> bool:
+        return self._zoomed
+
+    def _limits_changed(self, _ax) -> None:
+        if not self._home:
+            return
+        view = self.view_limits()
+        zoomed = any(not np.allclose(view[k], self._home[k], rtol=1e-7, atol=0)
+                     for k in view if k in self._home)
+        self._set_zoomed(zoomed)
+
+    def _set_zoomed(self, zoomed: bool) -> None:
+        if zoomed != self._zoomed:
+            self._zoomed = zoomed
+            self.viewChanged.emit(zoomed)
+        self.buttons["crop"].setEnabled(zoomed)
 
     # ------------------------------------------------------------------ Modi
 

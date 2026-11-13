@@ -231,6 +231,31 @@ def test_render_fit_log_and_invalid_limits():
     assert any(t.startswith("Fit: y = 1·e^(0.6931·x)") for t in legend_texts)
 
 
+def test_lines_reach_axis_edge_with_x_limits():
+    ds = make("a", [0, 1, 2, 3], [0, 1, 0, 1])
+    fig = Figure()
+    render(fig, [ds], PlotSettings(x=AxisSettings(min=0.5, max=2.5)))
+    xdata = list(fig.axes[0].get_lines()[0].get_xdata())
+    assert xdata == [0, 1, 2, 3]  # Nachbarpunkte außerhalb bleiben, Linie läuft bis zum Rand
+    assert fig.axes[0].get_xlim() == (0.5, 2.5)
+
+
+def test_zoom_between_two_samples_still_draws_segment():
+    ds = make("a", [0, 10], [0, 10])
+    fig = Figure()
+    render(fig, [ds], PlotSettings(x=AxisSettings(min=4, max=6)))
+    assert len(fig.axes[0].get_lines()[0].get_xdata()) == 2
+
+
+def test_with_view_does_not_touch_original():
+    from graph_plotter.plotting import with_view
+    original = PlotSettings(x=AxisSettings(min=0, max=10, unit="s"))
+    zoomed = with_view(original, {"x": (6, 2), "y": (-1, 1)})
+    assert (zoomed.x.min, zoomed.x.max, zoomed.x.unit) == (2, 6, "s")
+    assert (zoomed.y.min, zoomed.y.max) == (-1, 1)
+    assert (original.x.min, original.x.max) == (0, 10)
+
+
 # --------------------------------------------------------------------------- project
 
 def test_project_roundtrip(tmp_path):

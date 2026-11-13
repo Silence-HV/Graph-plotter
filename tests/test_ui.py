@@ -1,6 +1,7 @@
 """Tests der Oberfläche (ohne sichtbares Fenster)."""
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -182,6 +183,46 @@ def test_measurement(window, csv_file):
     assert "Δx = 2" in texts[-1] and "Δy = 2" in texts[-1]
     view._set_mode("measure")  # ausschalten löscht die Messung
     assert texts[-1] == ""
+
+
+def test_zoomed_view_export_copy_and_apply(window, tmp_path, monkeypatch):
+    path = tmp_path / "lang.csv"
+    path.write_text("t;U\n" + "\n".join(f"{i / 10};{(i % 7) / 3}".replace(".", ",") for i in range(41)),
+                    encoding="utf-8")
+    window.add_files([str(path)])
+    assert not window.act_export_view.isEnabled()
+
+    ax = window.plot_view.figure.axes[0]
+    ax.set_xlim(1.0, 2.0)  # wie ein Zoom mit der Lupe
+    assert window.plot_view.is_zoomed()
+    assert window.act_export_view.isEnabled() and window.act_apply_view.isEnabled()
+
+    captured = {}
+
+    def fake_export(target, datasets, settings, options, fmt=None):
+        captured["x"] = (settings.x.min, settings.x.max)
+        captured["y"] = (settings.y.min, settings.y.max)
+        Path(target).write_bytes(b"x")
+        return SimpleNamespace(reductions=[])
+
+    monkeypatch.setattr(mw, "export_plot", fake_export)
+    monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(tmp_path / "aus.pdf"), "")))
+    window.export(view_only=True)
+    assert captured["x"] == (1.0, 2.0)
+    assert captured["y"] == ax.get_ylim()
+    window.export()  # komplette Grafik: keine Grenzen
+    assert captured["x"] == (None, None)
+
+    window.copy_plot(view_only=True)
+    assert QApplication.clipboard().mimeData().hasImage()
+    QApplication.clipboard().clear()
+
+    window.apply_view()
+    assert window.axes_panel.x.min_edit.text() == "1"
+    assert window.axes_panel.x.max_edit.text() == "2"
+    assert window.plot_view.figure.axes[0].get_xlim() == (1.0, 2.0)
+    assert not window.plot_view.is_zoomed()  # neue Ausgangsansicht
 
 
 def test_page_mode_and_theme(window, csv_file):

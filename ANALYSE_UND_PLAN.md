@@ -151,9 +151,9 @@ requirements.txt           Laufzeit-Abhängigkeiten
 requirements-dev.txt       Zusätzlich für Tests und Build
 ```
 
-Tests ausführen: `.venv\Scripts\python -m pytest` (74 Tests, Oberflächentests laufen ohne Fenster)
+Tests ausführen: `.venv\Scripts\python -m pytest` (78 Tests, Oberflächentests laufen ohne Fenster)
 Abhängigkeiten installieren: `.venv\Scripts\python -m pip install -r requirements-dev.txt`
-`.exe` bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter_v30.exe`
+`.exe` bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter_v31.exe`
 
 ---
 
@@ -258,6 +258,21 @@ hochauflösende Bildschirme und den Windows-Dunkelmodus, und die LGPL-Lizenz ist
 - **Projekt speichern** merkt sich den Dateinamen (Strg+S speichert direkt, „Speichern unter…“ im Menü).
 - Der Bearbeitungsdialog der Matplotlib-Toolbar ist entfallen und damit auch der Legendenfehler bei Y2 (D27).
 
+### Ausschnitt exportieren (v3.1)
+
+Nach dem Zoomen oder Verschieben (Lupe bzw. Verschieben-Werkzeug über dem Plot) gibt es drei Möglichkeiten:
+
+- **„Aktuellen Ausschnitt exportieren…“** (Pfeil am Knopf „Exportieren“, Strg+Umschalt+E): exportiert genau
+  den sichtbaren Bereich, mit Exportgröße, Schrift und Datenreduktion aus den Einstellungen.
+- **„Aktuellen Ausschnitt kopieren“** (Pfeil am Knopf „Kopieren“): dasselbe für die Zwischenablage.
+- **„Ausschnitt übernehmen“** (Zuschneiden-Symbol über dem Plot): trägt den Zoom in die Min/Max-Felder ein.
+  Der Ausschnitt bleibt dann beim Neuzeichnen erhalten und wird im Projekt gespeichert. Zurück zur
+  ganzen Grafik: die Felder leeren.
+
+Die Ausschnitt-Funktionen sind nur aktiv, solange tatsächlich gezoomt ist. Linien laufen bei gesetzten
+X-Grenzen jetzt bis an den Achsenrand, statt am letzten Punkt im Bereich zu enden. Auch ein Zoom zwischen
+zwei Messpunkten zeigt das verbindende Segment.
+
 ### Tastenkürzel
 
 | Kürzel | Funktion |
@@ -266,14 +281,15 @@ hochauflösende Bildschirme und den Windows-Dunkelmodus, und die LGPL-Lizenz ist
 | Strg+Umschalt+O | Projekt öffnen |
 | Strg+S / Strg+Umschalt+S | Projekt speichern / speichern unter |
 | Strg+E | Exportieren |
+| Strg+Umschalt+E | Aktuellen Ausschnitt exportieren |
 | Strg+Umschalt+C | Plot kopieren |
 | Entf, Strg+↑/↓ | Datensatz entfernen / verschieben (in der Datenliste) |
 | Esc | Messung löschen (im Plot) |
 
 ### Bekannte Einschränkungen
 
-- Beim Ändern einer Einstellung wird neu gezeichnet; ein vorher eingestellter Zoom wird dabei
-  zurückgesetzt.
+- Beim Ändern einer Einstellung wird neu gezeichnet; ein Zoom wird dabei zurückgesetzt, sofern er nicht
+  vorher mit „Ausschnitt übernehmen“ in die Achsengrenzen eingetragen wurde.
 - Die Datenliste lässt sich (noch) nicht per Drag & Drop umsortieren, sondern über ˄/˅ bzw. Strg+↑/↓.
 - Zahlen im Plot (Achsen, Fit-Gleichung) verwenden den Dezimalpunkt.
 - Die automatische Kopfzeilen-Erkennung verlangt zwei aufeinanderfolgende Zahlenzeilen; steht direkt

@@ -17,7 +17,7 @@ from ..exporting import FORMATS, export_bytes, export_plot, normalize_extension,
 from ..loaders import (CSV_EXTENSIONS, EXCEL_EXTENSIONS, LoadError, default_spec, is_supported,
                        load_datasets, read_table)
 from ..model import DEFAULT_COLORS, Dataset
-from ..plotting import PlotError, PlotSettings, render
+from ..plotting import PlotError, PlotSettings, render, with_view
 from ..presets import PRESETS, matching_preset
 from ..project import PROJECT_EXTENSION, load_project, save_project
 from . import icons, theme
@@ -92,11 +92,20 @@ class MainWindow(QMainWindow):
                                      "Projekt speichern: Dateien und alle Einstellungen (Strg+S)")
         self.act_save_as = self._action("Speichern unter…", lambda: self.save_project(save_as=True),
                                         "Ctrl+Shift+S")
-        self.act_export = self._action("Exportieren", self.export, "Ctrl+E",
+        self.act_export = self._action("Komplette Grafik exportieren…", lambda: self.export(), "Ctrl+E",
                                        "Plot als PDF, SVG, PNG … speichern (Strg+E)")
-        self.act_copy = self._action("Kopieren", self.copy_plot, "Ctrl+Shift+C",
+        self.act_export_view = self._action("Aktuellen Ausschnitt exportieren…",
+                                            lambda: self.export(view_only=True), "Ctrl+Shift+E",
+                                            "Nur den gezoomten/verschobenen Bereich exportieren (Strg+Umschalt+E)")
+        self.act_copy = self._action("Komplette Grafik kopieren", lambda: self.copy_plot(), "Ctrl+Shift+C",
                                      "Plot in die Zwischenablage kopieren – zum Einfügen in Word/PowerPoint "
                                      "(Strg+Umschalt+C)")
+        self.act_copy_view = self._action("Aktuellen Ausschnitt kopieren", lambda: self.copy_plot(view_only=True),
+                                          tip="Nur den gezoomten/verschobenen Bereich kopieren")
+        self.act_apply_view = self._action("Ausschnitt als Achsengrenzen übernehmen", self.apply_view,
+                                           tip="Aktuellen Zoom dauerhaft in die Min/Max-Felder eintragen")
+        for action in (self.act_export_view, self.act_copy_view, self.act_apply_view):
+            action.setEnabled(False)
 
     def _build_toolbar(self) -> None:
         bar = QToolBar("Werkzeuge")
@@ -123,8 +132,22 @@ class MainWindow(QMainWindow):
                                              self.act_save.toolTip())
         bar.addWidget(self.save_button)
         bar.addSeparator()
-        bar.addAction(self.act_export)
-        bar.addAction(self.act_copy)
+        export_menu = QMenu(self)
+        export_menu.addAction(self.act_export)
+        export_menu.addAction(self.act_export_view)
+        export_menu.addSeparator()
+        export_menu.addAction(self.act_apply_view)
+        self.export_button = self._menu_button("Exportieren", export_menu, lambda: self.export(),
+                                               "Komplette Grafik exportieren (Strg+E) – Pfeil: nur den "
+                                               "aktuellen Zoom-Ausschnitt")
+        bar.addWidget(self.export_button)
+        copy_menu = QMenu(self)
+        copy_menu.addAction(self.act_copy)
+        copy_menu.addAction(self.act_copy_view)
+        self.copy_button = self._menu_button("Kopieren", copy_menu, lambda: self.copy_plot(),
+                                             "In die Zwischenablage kopieren (Strg+Umschalt+C) – Pfeil: nur "
+                                             "den aktuellen Zoom-Ausschnitt")
+        bar.addWidget(self.copy_button)
         bar.addSeparator()
 
         preset_label = QLabel("  Vorlage ")
@@ -210,6 +233,8 @@ class MainWindow(QMainWindow):
         self.plot_view.label_lookup = self._label_for
         self.plot_view.hover.connect(lambda text: self.coords_label.setText(text))
         self.plot_view.measured.connect(self._measured)
+        self.plot_view.viewChanged.connect(self._view_changed)
+        self.plot_view.applyViewRequested.connect(self.apply_view)
 
         # Rechts: Eigenschaften
         self.editor = DatasetEditor()
@@ -256,8 +281,9 @@ class MainWindow(QMainWindow):
         color = theme.colors()["text"]
         self.open_button.setIcon(icons.icon("open", color))
         self.save_button.setIcon(icons.icon("save", color))
-        self.act_export.setIcon(icons.icon("export", color))
-        self.act_copy.setIcon(icons.icon("copy", color))
+        self.export_button.setIcon(icons.icon("export", color))
+        self.copy_button.setIcon(icons.icon("copy", color))
+        self.act_apply_view.setIcon(icons.icon("crop", color))
         self.theme_button.setIcon(icons.icon("theme", color))
         for key, button in self.list_buttons.items():
             button.setIcon(icons.icon(key, color))
@@ -579,7 +605,7 @@ class MainWindow(QMainWindow):
             self._has_plot = False
             self._set_status("", str(exc).splitlines()[1:])
             return False
-        self.plot_view.after_render()
+        self.plot_view.after_render(result.limits)
         self._has_plot = True
         self.axes_panel.set_auto(result.limits)
         visible = [d for d in self.datasets if d.visible]
@@ -598,6 +624,35 @@ class MainWindow(QMainWindow):
     def _measured(self, text: str) -> None:
         self.status_label.setText(text or self._summary)
 
+    # ================================================================== Ausschnitt (Zoom)
+
+    def _view_changed(self, zoomed: bool) -> None:
+        for action in (self.act_export_view, self.act_copy_view, self.act_apply_view):
+            action.setEnabled(zoomed)
+        if zoomed:
+            self.statusBar().showMessage("Ausschnitt aktiv – exportieren/kopieren über den Pfeil an "
+                                         "„Exportieren“ bzw. „Kopieren“, dauerhaft übernehmen mit dem "
+                                         "Zuschneiden-Symbol über dem Plot.", 6000)
+
+    def apply_view(self) -> None:
+        """Aktuellen Zoom in die Min/Max-Felder eintragen (bleibt beim Neuzeichnen erhalten)."""
+        if not self.plot_view.is_zoomed():
+            return
+        view = self.plot_view.view_limits()
+        editors = {"x": self.axes_panel.x, "y": self.axes_panel.y, "y2": self.axes_panel.y2}
+        for key, (lo, hi) in view.items():
+            if key == "y2" and not self.axes_panel.y2_check.isChecked():
+                continue
+            lo, hi = sorted((lo, hi))
+            editors[key].min_edit.set_value(float(f"{lo:.6g}"))
+            editors[key].max_edit.set_value(float(f"{hi:.6g}"))
+        self.tabs.setCurrentWidget(self.tabs.widget(1))  # Achsen-Tab zeigen
+        self.statusBar().showMessage("Ausschnitt als Achsengrenzen übernommen. Zurück zur ganzen Grafik: "
+                                     "Min/Max-Felder leeren.", 6000)
+        self.replot()
+
+    # ================================================================== Export
+
     # ================================================================== Export
 
     def _settings_or_warn(self) -> Optional[PlotSettings]:
@@ -607,16 +662,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ungültige Eingaben", f"Bitte diese Felder korrigieren:\n\n{exc}")
             return None
 
-    def export(self) -> None:
+    def _export_settings(self, view_only: bool) -> Optional[PlotSettings]:
+        """Einstellungen für Export/Kopieren; mit ``view_only`` auf den aktuellen Zoom begrenzt."""
+        settings = self._settings_or_warn()
+        if settings is None:
+            return None
+        if view_only:
+            if not self.plot_view.is_zoomed():
+                QMessageBox.information(self, "Ausschnitt", "Es ist kein Ausschnitt aktiv. Zuerst mit der Lupe "
+                                                            "oder dem Verschieben-Werkzeug zoomen.")
+                return None
+            settings = with_view(settings, self.plot_view.view_limits())
+        return settings
+
+    def export(self, view_only: bool = False) -> None:
         if not self._has_plot:
             QMessageBox.warning(self, "Export", "Es gibt noch keinen Plot zum Exportieren.")
             return
-        settings = self._settings_or_warn()
+        settings = self._export_settings(view_only)
         if settings is None:
             return
         filters = ";;".join(f for f, _ in EXPORT_FILTERS)
-        suggested = str(Path(self._last_dir) / (Path(self._project_path).stem if self._project_path else "plot"))
-        path, chosen = QFileDialog.getSaveFileName(self, "Plot exportieren", suggested, filters)
+        stem = Path(self._project_path).stem if self._project_path else "plot"
+        suggested = str(Path(self._last_dir) / (f"{stem}_ausschnitt" if view_only else stem))
+        title = "Ausschnitt exportieren" if view_only else "Plot exportieren"
+        path, chosen = QFileDialog.getSaveFileName(self, title, suggested, filters)
         if not path:
             return
         ext = normalize_extension(path)
@@ -636,16 +706,18 @@ class MainWindow(QMainWindow):
 
         size_kb = Path(path).stat().st_size / 1024
         size_text = f"{size_kb / 1024:.1f} MB" if size_kb > 1024 else f"{size_kb:.0f} KB"
-        message = f"Plot exportiert ({size_text}, {settings.export.width_cm:g} × {settings.export.height_cm:g} cm):\n{path}"
+        what = "Ausschnitt" if view_only else "Plot"
+        message = (f"{what} exportiert ({size_text}, {settings.export.width_cm:g} × "
+                   f"{settings.export.height_cm:g} cm):\n{path}")
         if result.reductions:
             message += "\n\nDatenreduktion:\n" + "\n".join(result.reductions)
         QMessageBox.information(self, "Export", message)
 
-    def copy_plot(self) -> None:
+    def copy_plot(self, view_only: bool = False) -> None:
         if not self._has_plot:
             self.statusBar().showMessage("Es gibt noch keinen Plot zum Kopieren.", 4000)
             return
-        settings = self._settings_or_warn()
+        settings = self._export_settings(view_only)
         if settings is None:
             return
         options = options_from_settings(settings.export)
@@ -664,7 +736,8 @@ class MainWindow(QMainWindow):
         mime.setData("image/svg+xml", QByteArray(svg))
         QApplication.clipboard().setMimeData(mime)
         e = settings.export
-        self.statusBar().showMessage(f"Plot kopiert ({e.width_cm:g} × {e.height_cm:g} cm, {e.dpi} dpi) – "
+        what = "Ausschnitt" if view_only else "Plot"
+        self.statusBar().showMessage(f"{what} kopiert ({e.width_cm:g} × {e.height_cm:g} cm, {e.dpi} dpi) – "
                                      "in Word/PowerPoint mit Strg+V einfügen.", 6000)
 
     # ================================================================== Projekt

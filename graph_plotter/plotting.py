@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import warnings
 from dataclasses import asdict, dataclass, field, fields
@@ -236,10 +237,19 @@ def _prepare(datasets: list[Dataset], settings: PlotSettings, y2_on: bool,
             y = np.asarray(ds.y, dtype=float) / y_factor
 
         mask = np.isfinite(x) & np.isfinite(y)
-        if settings.x.min is not None:
-            mask &= x >= settings.x.min
-        if settings.x.max is not None:
-            mask &= x <= settings.x.max
+        if settings.x.min is not None or settings.x.max is not None:
+            lo = settings.x.min if settings.x.min is not None else -np.inf
+            hi = settings.x.max if settings.x.max is not None else np.inf
+            keep = (x >= lo) & (x <= hi)
+            # Auch Punkte behalten, deren Verbindungslinie den Bereich schneidet: Die Linie läuft dann
+            # bis zum Achsenrand (Matplotlib schneidet sie dort ab), statt kurz davor zu enden –
+            # und ein Zoom zwischen zwei Messpunkten zeigt noch das Segment dazwischen.
+            if len(x) > 1:
+                with np.errstate(invalid="ignore"):
+                    crosses = (np.minimum(x[:-1], x[1:]) <= hi) & (np.maximum(x[:-1], x[1:]) >= lo)
+                keep[:-1] |= crosses
+                keep[1:] |= crosses
+            mask &= keep
         if settings.x.log:
             mask &= x > 0
         if y_axis.log:
@@ -261,6 +271,20 @@ def _prepare(datasets: list[Dataset], settings: PlotSettings, y2_on: bool,
         color = ds.color or DEFAULT_COLORS[index % len(DEFAULT_COLORS)]
         entries.append(_Entry(index, ds, use_y2, x, y, err, color, legend_label))
     return entries
+
+
+def with_view(settings: PlotSettings, view: dict) -> PlotSettings:
+    """Kopie der Einstellungen, deren Achsengrenzen auf einen Ausschnitt (z. B. Zoom) gesetzt sind.
+
+    Args:
+        view: "x", "y" und ggf. "y2" -> (min, max) in angezeigten Einheiten.
+    """
+    result = copy.deepcopy(settings)
+    for key in ("x", "y", "y2"):
+        if key in view and view[key] is not None:
+            axis = getattr(result, key)
+            axis.min, axis.max = (float(v) for v in sorted(view[key]))
+    return result
 
 
 def _value_range(arrays: list[np.ndarray], lo: Optional[float], hi: Optional[float]) -> tuple[float, float]:
