@@ -17,9 +17,9 @@ main_file = project_dir / "Plotter.py"
 dist_dir = project_dir / "dist"
 build_dir = project_dir / "build"
 
-# Version aus Plotter.py auslesen
+# Version aus graph_plotter/__init__.py auslesen
 def get_version():
-    with open(main_file, 'r', encoding='utf-8') as f:
+    with open(project_dir / "graph_plotter" / "__init__.py", 'r', encoding='utf-8') as f:
         content = f.read()
     match = re.search(r'VERSION\s*=\s*["\'](\d+\.\d+)["\']', content)
     if match:
@@ -53,6 +53,7 @@ pyinstaller_cmd = [
     "--hidden-import=matplotlib.backends.backend_svg",
     "--hidden-import=matplotlib.figure",
     "--hidden-import=matplotlib.ticker",
+    "--hidden-import=xlrd",  # .xls-Unterstützung (wird nur bei Bedarf importiert)
     "--noconfirm",  # Alte Builds überschreiben ohne Nachfrage
     "--clean",  # Alten Build löschen
     str(main_file)
