@@ -96,7 +96,7 @@ def test_export_and_project(window, csv_file, tmp_path, monkeypatch):
 
     target = str(tmp_path / "plot")
     monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",
-                        staticmethod(lambda *a, **k: (target, mw.EXPORT_FORMATS[1][0])))
+                        staticmethod(lambda *a, **k: (target, mw.EXPORT_FILTERS[0][0])))  # PDF
     monkeypatch.setattr(mw.ExportDialog, "exec_", lambda self: QDialog.Accepted)
     window.export_plot()
     assert (tmp_path / "plot.pdf").stat().st_size > 0

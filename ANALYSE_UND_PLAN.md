@@ -162,6 +162,42 @@ Abhängigkeiten installieren: `.venv\Scripts\python -m pip install -r requiremen
 - **Tastenkürzel:** Strg+O laden, Strg+R plotten, Strg+E exportieren, Strg+S Projekt speichern.
 - **Unerwartete Fehler** werden angezeigt und protokolliert in `%APPDATA%\GraphPlotter\graphplotter.log`.
 
+---
+
+## 7. Vektorexport (v2.1)
+
+### Ursache der unbrauchbaren Vektorgrafiken
+
+In SVG und PDF wird **jeder Marker und jeder Fehlerbalken als eigenes Objekt** gespeichert. Linien
+vereinfacht Matplotlib selbst, Marker nicht. Bei 3 × 200.000 Messpunkten entstanden so 600.000 Kreise
+(bzw. 1,8 Mio. Fehlerbalken-Teile), an denen Word, Inkscape und PDF-Viewer scheitern.
+
+### Lösung
+
+| Maßnahme | Wirkung |
+|----------|---------|
+| Min/Max-Reduktion je Pixelspalte (M4-Verfahren) | Linien und Fehlerbänder: optisch identisch, Spitzen und Ausreißer bleiben erhalten |
+| Linie + Marker: Marker/Fehlerbalken nur an jedem n-ten Punkt (Standard max. 250 je Datensatz) | Marker dienen der Erkennbarkeit; die Linie zeigt weiterhin alle Daten |
+| Nur Marker: deckungsgleiche Marker zusammenfassen (Raster = halber Markerdurchmesser) | Punktwolken sehen gleich aus, bestehen aber aus wenigen tausend Objekten |
+| Text als echte Schrift (SVG: `<text>`, PDF: eingebettetes TrueType) in Arial | Beschriftungen in Inkscape/Illustrator/PowerPoint bearbeitbar; abschaltbar („Text als Pfade“) |
+| Neues Format EPS | für LaTeX und ältere Programme |
+
+Die Bildschirmansicht bleibt unreduziert, damit beim Zoomen alle Punkte sichtbar sind. Nach dem Export
+zeigt eine Meldung Dateigröße und was reduziert wurde.
+
+### Messung (3 Messreihen à 200.000 Punkte, 16 × 10 cm, 300 dpi)
+
+| Fall | Format | vorher | nachher |
+|------|--------|-------:|--------:|
+| Linie + Marker | SVG | 89,2 MB | 0,50 MB |
+| Linie + Marker | PDF | 4,8 MB | 0,18 MB |
+| Nur Marker | SVG | 88,4 MB | 1,38 MB |
+| Nur Linie | SVG | 0,77 MB | 0,39 MB |
+| Statistik mit Fehlerbalken | SVG | 393,6 MB | 0,89 MB |
+| Statistik mit Fehlerbalken | PDF | 23,4 MB | 0,22 MB |
+
+Export-Dauer jeweils unter 0,5 s.
+
 ### Bekannte Einschränkungen
 
 - Die Kurvenbearbeitung über die Matplotlib-Toolbar baut die Legende bei aktiver Y2-Achse ohne die

@@ -16,6 +16,10 @@ from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from . import VERSION  # noqa: E402
+from .plotting import STYLE_RC  # noqa: E402
+
+# Gleiche Schrift auf dem Bildschirm wie im Export (Formeln werden erst beim Zeichnen gesetzt)
+matplotlib.rcParams.update(STYLE_RC)
 
 log = logging.getLogger("graph_plotter")
 

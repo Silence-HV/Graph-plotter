@@ -10,12 +10,13 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 from matplotlib.figure import Figure
 from PyQt5.QtCore import QEvent, QItemSelectionModel, Qt
 from PyQt5.QtGui import QFont, QKeySequence
-from PyQt5.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
-                             QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                             QMainWindow, QMessageBox, QPushButton, QScrollArea, QShortcut,
-                             QSpinBox, QTableWidget, QToolButton, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+                             QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
+                             QShortcut, QSpinBox, QTableWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import VERSION
+from ..exporting import FORMATS, ExportOptions, export_plot, is_vector, normalize_extension
 from ..loaders import (CSV_EXTENSIONS, EXCEL_EXTENSIONS, LoadError, default_spec, is_supported,
                        load_datasets, read_table)
 from ..model import DEFAULT_COLORS, Dataset
@@ -25,17 +26,8 @@ from ..stats import ERROR_MODE_NAMES
 from .dialogs import ExportDialog, ImportDialog, StyleDialog
 from .widgets import AxisBox, ColorButton
 
-EXPORT_FORMATS = [
-    # (Filtertext, Endung, Vektorformat)
-    ("PNG – Rasterbild, verlustfrei (*.png)", "png", False),
-    ("PDF – Vektor (*.pdf)", "pdf", True),
-    ("SVG – Vektor (*.svg)", "svg", True),
-    ("SVGZ – komprimiertes SVG (*.svgz)", "svgz", True),
-    ("JPEG – komprimiertes Rasterbild (*.jpg)", "jpg", False),
-    ("TIFF – Rasterbild, LZW-komprimiert (*.tiff)", "tiff", False),
-    ("WebP – Rasterbild (*.webp)", "webp", False),
-]
-RASTERIZE_THRESHOLD = 5000  # ab so vielen Punkten Datenlinien standardmäßig rastern
+# (Filtertext, Endung) für den Speichern-Dialog
+EXPORT_FILTERS = [(f"{text} (*.{ext})", ext) for ext, (text, _) in FORMATS.items()]
 
 COL_VISIBLE, COL_COLOR, COL_LABEL, COL_AXIS, COL_STYLE = range(5)
 
@@ -571,61 +563,55 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ungültige Eingaben", f"Bitte diese Felder korrigieren:\n\n{exc}")
             return
 
-        filters = ";;".join(f for f, _, _ in EXPORT_FORMATS)
+        filters = ";;".join(f for f, _ in EXPORT_FILTERS)
         path, chosen = QFileDialog.getSaveFileName(self, "Plot exportieren", self._last_dir, filters)
         if not path:
             return
-        ext = Path(path).suffix.lower().lstrip(".")
-        if ext == "jpeg":
-            ext = "jpg"
-        known = {e: vector for _, e, vector in EXPORT_FORMATS}
-        if ext not in known:
-            ext = next((e for f, e, _ in EXPORT_FORMATS if f == chosen), "png")
+        ext = normalize_extension(path)
+        if ext not in FORMATS:
+            ext = next((e for f, e in EXPORT_FILTERS if f == chosen), "png")
             path += f".{ext}"
         self._last_dir = str(Path(path).parent)
 
         width_cm = self.fig.get_figwidth() * 2.54
         height_cm = self.fig.get_figheight() * 2.54
-        total_points = sum(d.n_points for d in self.datasets if d.visible)
         dialog = ExportDialog(
             self,
             width_cm=self._export["width_cm"] if not self._export["use_window"] else round(width_cm, 1),
             height_cm=self._export["height_cm"] if not self._export["use_window"] else round(height_cm, 1),
             dpi=self._export["dpi"],
             use_window=self._export["use_window"],
-            rasterize=total_points > RASTERIZE_THRESHOLD,
-            vector_format=known[ext],
+            rasterize=False,
+            vector_format=is_vector(ext),
         )
         if dialog.exec_() != QDialog.Accepted:
             return
-        options = dialog.values()
-        self._export.update({k: options[k] for k in ("use_window", "width_cm", "height_cm", "dpi")})
+        values = dialog.values()
+        self._export.update({k: values[k] for k in ("use_window", "width_cm", "height_cm", "dpi")})
 
-        if options["use_window"]:
+        if values["use_window"]:
             size = (self.fig.get_figwidth(), self.fig.get_figheight())
         else:
-            size = (options["width_cm"] / 2.54, options["height_cm"] / 2.54)
-        figure = Figure(figsize=size, dpi=100)
+            size = (values["width_cm"] / 2.54, values["height_cm"] / 2.54)
+        options = ExportOptions(width_in=size[0], height_in=size[1], dpi=values["dpi"],
+                                reduce_data=values["reduce_data"], thin_markers=values["thin_markers"],
+                                marker_limit=values["marker_limit"], editable_text=values["editable_text"],
+                                rasterize=values["rasterize"])
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            render(figure, self.datasets, settings, rasterize=known[ext] and options["rasterize"])
-            save_kwargs = {"format": {"jpg": "jpeg"}.get(ext, ext), "dpi": options["dpi"]}
-            if settings.legend_loc == "outside":
-                save_kwargs["bbox_inches"] = "tight"  # Legende außerhalb muss mit aufs Bild
-            if ext == "png":
-                save_kwargs["pil_kwargs"] = {"optimize": True, "compress_level": 9}
-            elif ext == "jpg":
-                save_kwargs["pil_kwargs"] = {"optimize": True, "quality": 95}
-            elif ext == "tiff":
-                save_kwargs["pil_kwargs"] = {"compression": "tiff_lzw"}
-            elif ext == "webp":
-                save_kwargs["pil_kwargs"] = {"quality": 95}
-            elif ext in ("svg", "svgz"):
-                save_kwargs["metadata"] = {"Creator": None, "Date": None, "Format": None, "Type": None}
-            figure.savefig(path, **save_kwargs)
+            result = export_plot(path, self.datasets, settings, options)
         except (PlotError, OSError, ValueError) as exc:
+            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Fehler beim Export", str(exc))
             return
-        QMessageBox.information(self, "Export", f"Plot exportiert:\n{path}")
+        QApplication.restoreOverrideCursor()
+
+        size_kb = Path(path).stat().st_size / 1024
+        size_text = f"{size_kb / 1024:.1f} MB" if size_kb > 1024 else f"{size_kb:.0f} KB"
+        message = f"Plot exportiert ({size_text}):\n{path}"
+        if result.reductions:
+            message += "\n\nDatenreduktion:\n" + "\n".join(result.reductions)
+        QMessageBox.information(self, "Export", message)
 
     # ------------------------------------------------------------------ Projekt
 

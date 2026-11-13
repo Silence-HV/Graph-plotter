@@ -335,11 +335,36 @@ class ExportDialog(QDialog):
         self.dpi_spin.setRange(50, 1200)
         self.dpi_spin.setSingleStep(50)
         self.dpi_spin.setValue(dpi)
-        self.raster_check = QCheckBox("Datenlinien rastern (kleinere Datei bei vielen Messpunkten)")
+        self.dpi_spin.setToolTip("Bei Vektorformaten bestimmt die Auflösung, wie fein die Datenreduktion arbeitet.")
+
+        self.reduce_check = QCheckBox("Datenreduktion (optisch verlustfrei)")
+        self.reduce_check.setChecked(True)
+        self.reduce_check.setToolTip("Je Pixelspalte bleiben erster, kleinster, größter und letzter Punkt erhalten.\n"
+                                     "Spitzen und Ausreißer bleiben sichtbar; unsichtbare Punkte entfallen.")
+        self.thin_check = QCheckBox("Marker und Fehlerbalken begrenzen, max. je Datensatz:")
+        self.thin_check.setChecked(True)
+        self.thin_check.setToolTip("Linie + Marker: nur jeder n-te Punkt bekommt einen Marker/Fehlerbalken.\n"
+                                   "Nur Marker: deckungsgleiche Marker werden zusammengefasst.\n"
+                                   "Hauptursache für langsame Vektorgrafiken: jeder Marker ist ein eigenes Objekt.")
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(10, 100000)
+        self.limit_spin.setSingleStep(50)
+        self.limit_spin.setValue(250)
+        thin_row = QHBoxLayout()
+        thin_row.addWidget(self.thin_check)
+        thin_row.addWidget(self.limit_spin)
+        thin_row.addStretch()
+        self.text_check = QCheckBox("Text bearbeitbar (echte Schrift statt Pfade)")
+        self.text_check.setChecked(True)
+        self.text_check.setToolTip("Beschriftungen bleiben in Inkscape, Illustrator, PowerPoint usw. bearbeitbar.\n"
+                                   "Ohne Haken wird Text in Kurven umgewandelt (sieht überall identisch aus).")
+        self.raster_check = QCheckBox("Datenlinien zusätzlich rastern (Notlösung)")
         self.raster_check.setChecked(rasterize)
-        self.raster_check.setToolTip("Achsen und Text bleiben Vektorgrafik; die Datenlinien werden mit der\n"
-                                     "gewählten Auflösung als Bild eingebettet.")
-        self.raster_check.setVisible(vector_format)
+        self.raster_check.setToolTip("Achsen und Text bleiben Vektorgrafik; die Datenlinien werden als Bild\n"
+                                     "eingebettet. Nur nötig, wenn die Datei trotz Reduktion zu groß ist.")
+        self.thin_check.toggled.connect(self.limit_spin.setEnabled)
+        for widget in (self.thin_check, self.limit_spin, self.text_check, self.raster_check):
+            widget.setVisible(vector_format)
 
         hint = QLabel("Schriftgrößen sind in Punkt angegeben: Bei kleiner Exportgröße wirken sie größer.")
         hint.setWordWrap(True)
@@ -349,6 +374,9 @@ class ExportDialog(QDialog):
         form.addRow("Breite:", self.width_spin)
         form.addRow("Höhe:", self.height_spin)
         form.addRow("Auflösung:", self.dpi_spin)
+        form.addRow(self.reduce_check)
+        form.addRow(thin_row)
+        form.addRow(self.text_check)
         form.addRow(self.raster_check)
         form.addRow(hint)
 
@@ -372,5 +400,9 @@ class ExportDialog(QDialog):
             "width_cm": self.width_spin.value(),
             "height_cm": self.height_spin.value(),
             "dpi": self.dpi_spin.value(),
+            "reduce_data": self.reduce_check.isChecked(),
+            "thin_markers": self.thin_check.isChecked(),
+            "marker_limit": self.limit_spin.value(),
+            "editable_text": self.text_check.isChecked(),
             "rasterize": self.raster_check.isChecked(),
         }

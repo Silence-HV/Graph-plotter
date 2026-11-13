@@ -7,12 +7,16 @@ import warnings
 from dataclasses import asdict, dataclass, field, fields
 from typing import Optional
 
+import matplotlib
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 
 from .fitting import FIT_KINDS, fit_curve
 from .model import DEFAULT_COLORS, Dataset
+from .reduction import (Reduction, band_reduce, dedupe_markers, minmax_reduce,
+                        thinning_step)
 from .stats import ERROR_MODES, summarize
 
 # Anzeige-Name -> (Symbol, Faktor). Die Schlüssel sind auch in Projektdateien gespeichert.
@@ -41,6 +45,29 @@ STAT_STYLES = {"errorbar": "Fehlerbalken", "band": "Band"}
 
 MAX_TICKS = 200
 LINE_ALPHA_MULTI = 0.7
+
+# Einheitliche Schrift, die auf jedem Windows-Rechner vorhanden ist – wichtig, damit bearbeitbarer
+# Text in SVG/PDF beim Empfänger genauso aussieht. Formeln ($...$) verwenden dieselbe Schrift.
+STYLE_RC = {
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
+    "mathtext.fontset": "custom",
+    "mathtext.rm": "sans",
+    "mathtext.it": "sans:italic",
+    "mathtext.bf": "sans:bold",
+    "axes.unicode_minus": True,
+    "svg.hashsalt": "graph-plotter",  # gleiche Datei bei gleichem Inhalt
+}
+
+
+def export_rc(editable_text: bool) -> dict:
+    """rcParams für den Export: Text als echte Schrift (bearbeitbar) oder als Pfade."""
+    rc = dict(STYLE_RC)
+    if editable_text:
+        rc.update({"svg.fonttype": "none", "pdf.fonttype": 42, "ps.fonttype": 42})
+    else:
+        rc.update({"svg.fonttype": "path", "pdf.fonttype": 3, "ps.fonttype": 3})
+    return rc
 
 
 class PlotError(Exception):
@@ -96,6 +123,21 @@ class RenderResult:
     warnings: list[str] = field(default_factory=list)
     limits: dict = field(default_factory=dict)  # "x", "y", "y2" -> (min, max) in angezeigten Einheiten
     plotted: int = 0
+    reductions: list[str] = field(default_factory=list)  # Zusammenfassung der Datenreduktion
+
+
+@dataclass
+class _Entry:
+    """Vorbereitete (skalierte, gefilterte) Daten eines Datensatzes."""
+
+    index: int
+    ds: Dataset
+    use_y2: bool
+    x: np.ndarray
+    y: np.ndarray
+    err: Optional[np.ndarray]
+    color: str
+    legend_label: str
 
 
 def prefix_factor(key: str) -> float:
@@ -113,6 +155,10 @@ def axis_label(axis: AxisSettings, default: str) -> str:
         exponent = round(math.log10(factor))
         return f"{label} [$\\times 10^{{{exponent}}}$]"
     return label
+
+
+def _fmt_count(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
 
 
 def _apply_limits(result: RenderResult, name: str, get_lim, set_lim, lo, hi, log: bool) -> None:
@@ -141,47 +187,21 @@ def _apply_tick(result: RenderResult, name: str, axis_obj, lim, tick, log: bool)
         return
     count = abs(lim[1] - lim[0]) / tick
     if count > MAX_TICKS:
-        result.warnings.append(
-            f"{name}: Tick-Abstand {tick:g} ergäbe {count:,.0f} Markierungen (max. {MAX_TICKS}) – ignoriert."
-            .replace(",", "."))
+        result.warnings.append(f"{name}: Tick-Abstand {tick:g} ergäbe {_fmt_count(int(count))} "
+                               f"Markierungen (max. {MAX_TICKS}) – ignoriert.")
         return
     axis_obj.set_major_locator(MultipleLocator(tick))
 
 
-def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
-           rasterize: bool = False) -> RenderResult:
-    """Alle sichtbaren Datensätze zeichnen.
-
-    Args:
-        rasterize: Datenlinien als Pixelbild einbetten (kleinere PDF/SVG-Dateien bei vielen Punkten).
-
-    Raises:
-        PlotError: wenn nichts gezeichnet werden kann.
-    """
-    visible = [(i, d) for i, d in enumerate(datasets) if d.visible]
-    if not visible:
-        raise PlotError("Keine sichtbaren Datensätze vorhanden.")
-
-    result = RenderResult()
-    fig.clear()
-    ax = fig.add_subplot(111)
-    ax2 = ax.twinx() if settings.y2_enabled else None
-
-    if settings.x.log:
-        ax.set_xscale("log")
-    if settings.y.log:
-        ax.set_yscale("log")
-    if ax2 is not None and settings.y2.log:
-        ax2.set_yscale("log")
-
+def _prepare(datasets: list[Dataset], settings: PlotSettings, y2_on: bool,
+             result: RenderResult) -> list[_Entry]:
+    """Daten skalieren, Statistik berechnen und auf den sichtbaren/gültigen Bereich filtern."""
+    entries = []
     x_factor = prefix_factor(settings.x.prefix)
-    alpha = LINE_ALPHA_MULTI if len(visible) > 1 else 1.0
-    handles = []
-    any_statistics = False
-
-    for index, ds in visible:
-        use_y2 = ax2 is not None and ds.axis == "Y2"
-        target = ax2 if use_y2 else ax
+    for index, ds in enumerate(datasets):
+        if not ds.visible:
+            continue
+        use_y2 = y2_on and ds.axis == "Y2"
         y_axis = settings.y2 if use_y2 else settings.y
         y_factor = prefix_factor(y_axis.prefix)
 
@@ -191,7 +211,6 @@ def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
             mean, err, _ = summarize(ds.y_raw, settings.error_mode)
             y = mean / y_factor
             err = err / y_factor
-            any_statistics = True
         else:
             y = np.asarray(ds.y, dtype=float) / y_factor
 
@@ -212,40 +231,160 @@ def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
         if err is not None:
             err = np.nan_to_num(err[mask], nan=0.0)
 
-        color = ds.color or DEFAULT_COLORS[index % len(DEFAULT_COLORS)]
         suffixes = []
         if ds.is_statistics:
             suffixes.append(f"Mittelwert ± {ERROR_MODES[settings.error_mode]}")
         if use_y2:
             suffixes.append("Y2")
         legend_label = ds.display_label + (f" ({', '.join(suffixes)})" if suffixes else "")
+        color = ds.color or DEFAULT_COLORS[index % len(DEFAULT_COLORS)]
+        entries.append(_Entry(index, ds, use_y2, x, y, err, color, legend_label))
+    return entries
 
+
+def _value_range(arrays: list[np.ndarray], lo: Optional[float], hi: Optional[float]) -> tuple[float, float]:
+    data_lo = min((float(a.min()) for a in arrays if len(a)), default=0.0)
+    data_hi = max((float(a.max()) for a in arrays if len(a)), default=1.0)
+    return (lo if lo is not None else data_lo, hi if hi is not None else data_hi)
+
+
+def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
+           rasterize: bool = False, reduction: Optional[Reduction] = None) -> RenderResult:
+    """Alle sichtbaren Datensätze zeichnen.
+
+    Args:
+        rasterize: Datenlinien als Pixelbild einbetten (Notlösung für sehr komplexe Grafiken).
+        reduction: Optisch verlustfreie Datenreduktion für den Export (None = alle Punkte zeichnen,
+            z. B. für die Bildschirmansicht, in der gezoomt wird).
+
+    Raises:
+        PlotError: wenn nichts gezeichnet werden kann.
+    """
+    with matplotlib.rc_context(STYLE_RC):
+        return _render(fig, datasets, settings, rasterize, reduction)
+
+
+def _render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
+            rasterize: bool, reduction: Optional[Reduction]) -> RenderResult:
+    if not any(d.visible for d in datasets):
+        raise PlotError("Keine sichtbaren Datensätze vorhanden.")
+
+    result = RenderResult()
+    entries = _prepare(datasets, settings, settings.y2_enabled, result)
+    if not entries:
+        raise PlotError("Keine Datenpunkte innerhalb der gesetzten Grenzen.\n" + "\n".join(result.warnings))
+
+    fig.clear()
+    ax = fig.add_subplot(111)
+    ax2 = ax.twinx() if settings.y2_enabled else None
+
+    if settings.x.log:
+        ax.set_xscale("log")
+    if settings.y.log:
+        ax.set_yscale("log")
+    if ax2 is not None and settings.y2.log:
+        ax2.set_yscale("log")
+
+    # Wertebereiche je Achse (nur für das Zusammenfassen von Markern benötigt)
+    x_range = _value_range([e.x for e in entries], settings.x.min, settings.x.max)
+    y_ranges = {}
+    for use_y2, axis in ((False, settings.y), (True, settings.y2)):
+        arrays = []
+        for e in entries:
+            if e.use_y2 == use_y2:
+                arrays.append(e.y)
+                if e.err is not None:
+                    arrays += [e.y - e.err, e.y + e.err]
+        y_ranges[use_y2] = _value_range(arrays, axis.min, axis.max)
+
+    alpha = LINE_ALPHA_MULTI if len(entries) > 1 else 1.0
+    handles = []
+    any_statistics = False
+
+    for e in entries:
+        ds = e.ds
+        target = ax2 if e.use_y2 else ax
+        y_log = (settings.y2 if e.use_y2 else settings.y).log
+        x, y, err, color = e.x, e.y, e.err, e.color
+        n = len(x)
+        notes = []
+
+        # --- Reduktion planen ------------------------------------------------------------
+        line_x, line_y = x, y
+        if reduction is not None and reduction.lines and ds.draw != "marker":
+            line_x, line_y = minmax_reduce(x, y, reduction.width_px, settings.x.log)
+            if len(line_x) < n:
+                notes.append(f"Linie {_fmt_count(len(line_x))} Punkte")
+
+        marker_idx = None  # None = alle Punkte
+        if reduction is not None and reduction.thin_markers and ds.draw != "line":
+            if ds.draw == "marker":
+                # Zelle = halber Markerdurchmesser: In dichten Punktwolken nicht sichtbar,
+                # aber deutlich weniger Objekte als bei pixelgenauer Zusammenfassung.
+                cell = max(1.0, ds.markersize * reduction.dpi / 72.0 / 2.0)
+                idx = dedupe_markers(x, y, x_range, y_ranges[e.use_y2], reduction.width_px,
+                                     reduction.height_px, cell, settings.x.log, y_log)
+                if len(idx) < n:
+                    marker_idx = idx
+                    notes.append(f"Marker {_fmt_count(len(idx))} (deckungsgleiche zusammengefasst)")
+            else:
+                step = thinning_step(n, reduction.marker_limit)
+                if step > 1:
+                    marker_idx = np.arange(0, n, step)
+                    notes.append(f"Marker an jedem {step}. Punkt")
+
+        # --- Fehlerdarstellung -------------------------------------------------------------
         if err is not None:
+            any_statistics = True
             if settings.stat_style == "band":
-                target.fill_between(x, y - err, y + err, color=color, alpha=0.25 * alpha,
+                bx, lo, hi = x, y - err, y + err
+                if reduction is not None and reduction.lines:
+                    bx, lo, hi = band_reduce(bx, lo, hi, reduction.width_px, settings.x.log)
+                target.fill_between(bx, lo, hi, color=color, alpha=0.25 * alpha,
                                     linewidth=0, rasterized=rasterize)
             else:
-                target.errorbar(x, y, yerr=err, fmt="none", ecolor=color, elinewidth=1.2,
-                                capsize=3, capthick=1.2, alpha=alpha, rasterized=rasterize)
+                err_idx = slice(None)
+                if reduction is not None and reduction.thin_markers:
+                    if ds.draw == "marker" and marker_idx is not None:
+                        err_idx = marker_idx
+                    else:
+                        step = thinning_step(n, reduction.marker_limit)
+                        if step > 1:
+                            err_idx = np.arange(0, n, step)
+                            notes.append(f"Fehlerbalken an jedem {step}. Punkt")
+                target.errorbar(x[err_idx], y[err_idx], yerr=err[err_idx], fmt="none", ecolor=color,
+                                elinewidth=1.2, capsize=3, capthick=1.2, alpha=alpha,
+                                rasterized=rasterize)
 
+        # --- Linie und Marker --------------------------------------------------------------
         draw_line = ds.draw != "marker"
         draw_marker = ds.draw != "line"
-        line, = target.plot(
-            x, y,
-            color=color,
-            linestyle=ds.linestyle if draw_line else "none",
-            linewidth=ds.linewidth,
-            marker=ds.marker if draw_marker else "None",
-            markersize=ds.markersize,
-            markerfacecolor=color if ds.marker_filled else "white",
-            markeredgecolor=color,
-            alpha=alpha,
-            label=legend_label,
-            rasterized=rasterize,
-        )
-        handles.append(line)
+        line_style = dict(color=color, linestyle=ds.linestyle if draw_line else "none",
+                          linewidth=ds.linewidth, alpha=alpha)
+        marker_style = dict(marker=ds.marker if draw_marker else "None", markersize=ds.markersize,
+                            markerfacecolor=color if ds.marker_filled else "white",
+                            markeredgecolor=color)
+
+        if marker_idx is None and len(line_x) == n:
+            artist, = target.plot(x, y, label=e.legend_label, rasterized=rasterize,
+                                  **line_style, **marker_style)
+            handles.append(artist)
+        else:
+            # Linie und Marker getrennt zeichnen; die Legende bekommt ein kombiniertes Symbol.
+            if draw_line:
+                target.plot(line_x, line_y, rasterized=rasterize, **line_style)
+            if draw_marker:
+                mx, my = (x, y) if marker_idx is None else (x[marker_idx], y[marker_idx])
+                target.plot(mx, my, rasterized=rasterize, color=color, linestyle="none",
+                            alpha=alpha, **{k: v for k, v in marker_style.items()})
+            proxy = Line2D([], [], label=e.legend_label, **line_style, **marker_style)
+            handles.append(proxy)
         result.plotted += 1
 
+        if notes:
+            result.reductions.append(f"„{ds.display_label}“: {_fmt_count(n)} Punkte → " + ", ".join(notes))
+
+        # --- Kurvenanpassung ---------------------------------------------------------------
         if ds.fit and ds.fit != "none":
             try:
                 fit = fit_curve(x, y, ds.fit)
@@ -261,9 +400,6 @@ def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
                                         label=f"Fit: {fit.equation}, R² = {fit.r2:.4f}",
                                         rasterized=rasterize)
                 handles.append(fit_line)
-
-    if result.plotted == 0:
-        raise PlotError("Keine Datenpunkte innerhalb der gesetzten Grenzen.\n" + "\n".join(result.warnings))
 
     # Beschriftung
     label_fs = settings.label_fontsize
@@ -303,7 +439,7 @@ def render(fig: Figure, datasets: list[Dataset], settings: PlotSettings,
             ax.grid(True, which="minor", alpha=0.1)
 
     # Legende (auf der obersten Achse, damit sie nicht von Y2-Linien verdeckt wird)
-    has_custom_label = any(d.label.strip() for _, d in visible)
+    has_custom_label = any(e.ds.label.strip() for e in entries)
     show_legend = settings.legend_loc != "none" and (
         len(handles) > 1 or any_statistics or ax2 is not None or has_custom_label)
     if show_legend:
