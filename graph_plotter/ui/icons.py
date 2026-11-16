@@ -31,7 +31,8 @@ _PATHS = {
     "app": '<rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="{c}" stroke="none"/>'
            '<path d="M6 6v12h12" stroke="#ffffff" stroke-width="1.8"/>'
            '<path d="M8.5 14.5l3-4 2.5 2.5 3.5-5" stroke="#ffffff" stroke-width="2"/>',
-    "crop":'<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
+    "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "crop": '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
     "page":'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
     "up": '<path d="M6 15l6-6 6 6"/>',
     "down": '<path d="M6 9l6 6 6-6"/>',

@@ -296,6 +296,69 @@ def test_progress_dialog_does_not_reappear(app):
     assert seen == [0, 0]
 
 
+def _release(version=(9, 1), setup=True):
+    from graph_plotter.updates import ReleaseInfo
+    return ReleaseInfo(version=version, tag="v" + ".".join(map(str, version)),
+                       page_url="https://example.invalid/release",
+                       setup_url="https://example.invalid/setup.exe" if setup else "", setup_name="setup.exe")
+
+
+def test_update_banner_and_skip(window, monkeypatch):
+    from graph_plotter.ui import update_ui
+    opened = []
+    monkeypatch.setattr(update_ui.QDesktopServices, "openUrl", staticmethod(lambda url: opened.append(url.toString())))
+    infos = []
+    monkeypatch.setattr(update_ui.QMessageBox, "information", staticmethod(lambda *a, **k: infos.append(a[2])))
+
+    controller = window.updates
+    controller._found(_release((0, 1)), True)            # ältere Version, manuell gesucht
+    assert not window.update_banner.isVisibleTo(window) and "neueste Version" in infos[-1]
+
+    controller._found(_release(), False)                 # neuere Version beim Start
+    assert window.update_banner.isVisibleTo(window)
+    assert "9.1 ist verfügbar" in window.update_banner.label.text()
+    assert window.update_banner.update_button.text() == "Herunterladen"   # aus Python gestartet
+
+    window.update_banner.update_button.click()           # nicht installiert: Download-Seite öffnen
+    assert opened == ["https://example.invalid/release"]
+
+    window.update_banner.skip_button.click()
+    assert window.store.value("update_skip_tag") == "v9.1"
+    assert not window.update_banner.isVisibleTo(window)
+    controller._found(_release(), False)                 # übersprungene Version: kein Hinweis
+    assert not window.update_banner.isVisibleTo(window)
+    controller._found(_release(), True)                  # bei manueller Suche aber schon
+    assert window.update_banner.isVisibleTo(window)
+
+
+def test_update_install_flow(window, monkeypatch, tmp_path):
+    """Installierte Fassung: herunterladen, Installer starten, Programm beenden."""
+    from graph_plotter import app as app_module
+    from graph_plotter.ui import update_ui
+
+    setup = tmp_path / "setup.exe"
+    setup.write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(update_ui.updates, "install_kind", lambda: "installed")
+    monkeypatch.setattr(update_ui.updates, "download",
+                        lambda info, progress=None, cancelled=None: (progress(1, 1), setup)[1])
+    monkeypatch.setattr(update_ui.updates, "launch_installer", lambda path: calls.append(("start", path)))
+    monkeypatch.setattr(app_module, "release_mutex", lambda: calls.append(("mutex",)))
+    monkeypatch.setattr(update_ui.QApplication, "quit", staticmethod(lambda: calls.append(("quit",))))
+    monkeypatch.setattr(update_ui.UpdateController, "_confirm", lambda self, info: True)
+
+    window.updates._found(_release(), False)
+    assert window.update_banner.update_button.text() == "Jetzt aktualisieren"
+    window.update_banner.update_button.click()
+    for _ in range(100):                                  # Download läuft im Hintergrund
+        QApplication.processEvents()
+        if calls:
+            break
+        import time
+        time.sleep(0.02)
+    assert calls == [("mutex",), ("start", setup), ("quit",)]
+
+
 def test_selftest_passes(app):
     from graph_plotter.selftest import run_selftest
     assert run_selftest() == 0

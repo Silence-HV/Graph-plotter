@@ -105,6 +105,8 @@ def _stylesheet(c: dict) -> str:
     QToolButton:checked {{ background: {c['selection']}; border-color: {c['accent']}; }}
     QToolButton::menu-indicator {{ image: none; width: 0; }}
     #SidePanel {{ background: {c['panel']}; border: none; }}
+    #UpdateBanner {{ background: {c['selection']}; border: none; border-bottom: 1px solid {c['border']}; }}
+    #UpdateBanner QLabel {{ font-weight: 600; }}
     #PanelTitle {{ color: {c['muted']}; font-weight: 600; letter-spacing: 1px; }}
     #Muted {{ color: {c['muted']}; }}
     #Warning {{ color: {c['warning']}; }}

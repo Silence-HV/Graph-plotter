@@ -27,6 +27,7 @@ from .import_dialog import ImportDialog
 from .panels import AppearancePanel, AxesPanel, DatasetEditor, ExportPanel, scrollable
 from .plot_view import PlotView
 from .tasks import Cancelled, run_busy
+from .update_ui import UpdateBanner, UpdateController
 
 EXPORT_FILTERS = [(f"{text} (*.{ext})", ext) for ext, (text, _) in FORMATS.items()]
 LIVE_DELAY_MS = 250
@@ -167,7 +168,8 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
 
-        theme_menu = QMenu(self)
+        program_menu = QMenu(self)
+        theme_menu = program_menu.addMenu("Farbschema")
         group = QActionGroup(self)
         self.theme_actions = {}
         for mode, text in theme.THEME_MODES.items():
@@ -176,12 +178,19 @@ class MainWindow(QMainWindow):
             group.addAction(action)
             theme_menu.addAction(action)
             self.theme_actions[mode] = action
-        theme_menu.addSeparator()
-        theme_menu.addAction("Über Graph Plotter…", self._about)
+        program_menu.addSeparator()
+        self.act_check_updates = program_menu.addAction("Nach Updates suchen…",
+                                                        lambda: self.updates.check(manual=True))
+        self.act_auto_updates = program_menu.addAction("Beim Start nach Updates suchen")
+        self.act_auto_updates.setCheckable(True)
+        self.act_auto_updates.setChecked(self.store.value("update_check", True, type=bool))
+        self.act_auto_updates.toggled.connect(lambda on: self.updates.set_enabled(on))
+        program_menu.addSeparator()
+        program_menu.addAction("Über Graph Plotter…", self._about)
         self.theme_button = QToolButton()
-        self.theme_button.setText("Farbschema")
-        self.theme_button.setToolTip("Farbschema und Programminfo")
-        self.theme_button.setMenu(theme_menu)
+        self.theme_button.setText("Programm")
+        self.theme_button.setToolTip("Farbschema, Updates und Programminfo")
+        self.theme_button.setMenu(program_menu)
         self.theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.theme_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         bar.addWidget(self.theme_button)
@@ -271,7 +280,16 @@ class MainWindow(QMainWindow):
         self.splitter.setChildrenCollapsible(False)
         left.setMinimumWidth(220)
         self.tabs.setMinimumWidth(320)
-        self.setCentralWidget(self.splitter)
+        # Update-Hinweis oberhalb der drei Bereiche
+        self.update_banner = UpdateBanner()
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(self.update_banner)
+        container_layout.addWidget(self.splitter, 1)
+        self.setCentralWidget(container)
+        self.updates = UpdateController(self, self.store, self.update_banner)
 
     def _build_statusbar(self) -> None:
         bar = self.statusBar()
@@ -292,7 +310,7 @@ class MainWindow(QMainWindow):
         self.export_button.setIcon(icons.icon("export", color))
         self.copy_button.setIcon(icons.icon("copy", color))
         self.act_apply_view.setIcon(icons.icon("crop", color))
-        self.theme_button.setIcon(icons.icon("theme", color))
+        self.theme_button.setIcon(icons.icon("menu", color))
         for key, button in self.list_buttons.items():
             button.setIcon(icons.icon(key, color))
         self.plot_view.refresh_icons()

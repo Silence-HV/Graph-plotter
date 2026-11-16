@@ -39,6 +39,9 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
+; Läuft das Programm, bietet Setup an, es zu schließen (Name wird in graph_plotter/app.py angelegt)
+AppMutex=GraphPlotterLaeuft
+CloseApplications=yes
 
 [Languages]
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
@@ -46,6 +49,12 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "assoc"; Description: "Projektdateien (.gplot) mit Graph Plotter öffnen"; GroupDescription: "Dateizuordnung:"
+
+[InstallDelete]
+; Bei einem Update die Bibliotheken der alten Version vollständig entfernen, damit keine veralteten
+; Dateien liegen bleiben (Einstellungen und Projekte liegen woanders und sind nicht betroffen).
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\Lizenzen"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -65,3 +74,5 @@ Root: HKA; Subkey: "Software\Classes\GraphPlotter.Projekt\shell\open\command"; V
 
 [Run]
 Filename: "{app}\GraphPlotter.exe"; Description: "{cm:LaunchProgram,Graph Plotter}"; Flags: nowait postinstall skipifsilent
+; Automatisches Update aus dem Programm (Setup läuft mit /SILENT): Programm danach wieder starten
+Filename: "{app}\GraphPlotter.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent

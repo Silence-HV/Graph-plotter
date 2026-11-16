@@ -355,3 +355,34 @@ Installer zeigt sie an, im Programmordner liegt sie als `LIZENZ.txt`.
 - Code-Signatur (entfernt die SmartScreen-Warnung; kostenpflichtig).
 - Weiterhin: mehrere Tabellenblöcke untereinander in einer Datei, eigene X-Spalte je Y-Spalte in einem
   Schritt, Vorverarbeitung (E29), Kennwerte (E30), Datenexport (E31).
+
+---
+
+## 10. Updates (v3.2.1 und v3.3)
+
+### 3.2.1 – Fehlerkorrektur
+
+Das Fenster „Bitte warten“ tauchte rund 4 s nach dem Laden über dem Importdialog auf und blieb stehen.
+Ursache: `QProgressDialog` startet beim Erzeugen einen eigenen Zeitgeber, der das Fenster nach 4 s
+einblendet. Das versteckte Fenster wurde wegen der verschachtelten Ereignisschleife des Importdialogs
+nicht sofort gelöscht. Es wird jetzt erst bei Bedarf erzeugt und sein Zeitgeber mit `reset()` gestoppt.
+Ein Regressionstest bildet den Ablauf (Laden aus einem Klick, danach offener Dialog) nach.
+
+### 3.3 – Updates ohne Deinstallation
+
+- **Installer:** Ein Update wird einfach über die alte Version installiert (gleiche `AppId`).
+  `[InstallDelete]` leert vorher `_internal` und `Lizenzen`, damit keine veralteten Bibliotheken liegen
+  bleiben. `AppMutex` erkennt ein laufendes Programm; bei einem Update aus dem Programm (`/SILENT`)
+  startet Setup es danach wieder.
+- **Update-Hinweis im Programm** (`updates.py`, `ui/update_ui.py`): Beim Start der ausgelieferten
+  Fassung wird nach 4 s im Hintergrund das neueste GitHub-Release abgefragt. Ist es neuer, erscheint
+  oben ein Hinweisbalken: „Jetzt aktualisieren“, „Was ist neu?“, „Diese Version überspringen“,
+  „Später“. Abschaltbar und manuell auslösbar im Menü „Programm“.
+- **„Jetzt aktualisieren“** (installierte Fassung): Installer herunterladen, Größe und SHA-256-Prüfsumme
+  (von GitHub geliefert) kontrollieren, Programm schließen, Setup mit `/SILENT` starten; Setup startet
+  das Programm danach neu. Portable Fassung: öffnet die Download-Seite.
+- **Getestet:** Echtes Update 3.2.1 → 3.3 über eine bestehende Installation – Version ersetzt, nur ein
+  Eintrag unter „Apps“, veraltete Datei entfernt, Programm neu gestartet, Selbsttest bestanden.
+
+**Voraussetzung:** Update-Prüfung und Downloads funktionieren für andere nur, wenn das Repository
+öffentlich ist. Bei einem privaten Repository antwortet GitHub mit „nicht gefunden“.

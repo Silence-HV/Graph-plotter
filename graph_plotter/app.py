@@ -68,6 +68,28 @@ def _install_excepthook(log_path: Path | None) -> None:
 
 _app = None
 _window = None
+_mutex = None
+APP_MUTEX = "GraphPlotterLaeuft"  # muss zu AppMutex in installer.iss passen
+
+
+def _create_mutex() -> None:
+    """Benannte Kennung anlegen, an der der Installer ein laufendes Programm erkennt (nur Windows)."""
+    global _mutex
+    if sys.platform == "win32" and _mutex is None:
+        try:
+            import ctypes
+            _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, APP_MUTEX)
+        except (AttributeError, OSError):
+            _mutex = None
+
+
+def release_mutex() -> None:
+    """Kennung freigeben – vor dem Start eines Updates, damit der Installer nicht wartet."""
+    global _mutex
+    if _mutex:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(_mutex)
+        _mutex = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,9 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         from .selftest import run_selftest
         return run_selftest()
 
+    _create_mutex()
     _window = MainWindow()
     _window.show()
     # Dateien von der Kommandozeile bzw. „Öffnen mit“ laden
     if len(argv) > 1:
         _window.open_paths(argv[1:])
+    # Im Hintergrund nach einer neueren Version suchen (nur in der ausgelieferten Fassung, abschaltbar)
+    _window.updates.check_on_start()
     return _app.exec()

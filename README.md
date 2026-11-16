@@ -18,6 +18,22 @@ Läuft unter Windows 10 (ab Version 1809) und Windows 11, jeweils 64 Bit.
 Windows warnt deshalb beim ersten Start. Auf „Weitere Informationen“ und dann „Trotzdem ausführen“
 klicken.
 
+## Updates
+
+Das Programm prüft beim Start im Hintergrund, ob es eine neuere Version gibt. Dabei wird nur die
+Release-Seite des Projekts auf GitHub abgefragt; Daten über dich oder deine Dateien werden nicht
+übertragen.
+
+- Gibt es ein Update, erscheint oben im Fenster ein Hinweis. **„Jetzt aktualisieren“** lädt den
+  Installer, prüft ihn, schließt das Programm, installiert die neue Version und startet sie wieder.
+  Einstellungen und Projekte bleiben erhalten; deinstallieren ist nicht nötig.
+- Bei der **portablen Version** öffnet derselbe Knopf die Download-Seite. Den alten Ordner durch den
+  neuen ersetzen.
+- Manuell suchen und die automatische Prüfung abschalten: Menü **„Programm“** oben rechts.
+
+Ein Update von Hand geht genauso: die neue `…_Setup.exe` ausführen, die alte Version bleibt nicht
+zurück.
+
 ## Kurzanleitung
 
 1. **Daten laden:** Dateien ins Fenster ziehen oder „Öffnen“ wählen. Im Importdialog Kopfzeile,
