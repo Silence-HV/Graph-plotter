@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtWidgets import QProgressDialog, QWidget
@@ -33,30 +34,37 @@ def run_busy(parent: QWidget, label: str, function, *args, **kwargs):
         return future.result()
 
     loop = QEventLoop()
-    dialog = QProgressDialog(label, "Abbrechen", 0, 0, parent)
-    dialog.setWindowTitle("Bitte warten")
-    dialog.setWindowModality(Qt.WindowModality.WindowModal)
-    dialog.setMinimumDuration(0)
-    dialog.setAutoClose(False)
-    dialog.setAutoReset(False)
-    dialog.hide()
     cancelled = []
+    dialog: Optional[QProgressDialog] = None
 
     def on_cancel():
         cancelled.append(True)
         loop.quit()
 
+    def show_dialog():
+        # Erst jetzt erzeugen: QProgressDialog startet beim Erzeugen einen eigenen Zeitgeber, der das
+        # Fenster nach 4 s von selbst einblendet – auch wenn es inzwischen versteckt wurde.
+        nonlocal dialog
+        if future.done():
+            return
+        dialog = QProgressDialog(label, "Abbrechen", 0, 0, parent)
+        dialog.setWindowTitle("Bitte warten")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.canceled.connect(on_cancel)
+        dialog.show()
+
     def poll():
         if future.done():
             loop.quit()
 
-    dialog.canceled.connect(on_cancel)
     timer = QTimer()
     timer.setInterval(POLL_MS)
     timer.timeout.connect(poll)
     show_timer = QTimer()
     show_timer.setSingleShot(True)
-    show_timer.timeout.connect(lambda: None if future.done() else dialog.show())
+    show_timer.timeout.connect(show_dialog)
     timer.start()
     show_timer.start(SHOW_AFTER_MS)
     try:
@@ -64,8 +72,11 @@ def run_busy(parent: QWidget, label: str, function, *args, **kwargs):
     finally:
         timer.stop()
         show_timer.stop()
-        dialog.hide()
-        dialog.deleteLater()
+        if dialog is not None:
+            dialog.canceled.disconnect(on_cancel)
+            dialog.reset()   # stoppt den internen Zeitgeber, sonst taucht das Fenster später wieder auf
+            dialog.hide()
+            dialog.deleteLater()
     if cancelled and not future.done():
         raise Cancelled()
     return future.result()

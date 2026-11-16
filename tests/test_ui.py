@@ -261,6 +261,41 @@ def test_run_busy_returns_result_and_raises(app):
         run_busy(None, "Test", lambda: 1 / 0)
 
 
+def test_progress_dialog_does_not_reappear(app):
+    """Regression: „Bitte warten“ tauchte ~4 s nach dem Laden über dem Importdialog wieder auf.
+
+    Ursache war der interne 4-s-Zeitgeber von QProgressDialog; aufgedeckt wird das nur, wenn das Laden
+    aus der laufenden Ereignisschleife kommt (wie ein Klick) und danach eine verschachtelte Schleife
+    (Importdialog) offen bleibt.
+    """
+    import time
+
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QProgressDialog
+
+    from graph_plotter.ui.tasks import run_busy
+
+    seen = []
+
+    def visible_progress():
+        return [w for w in QApplication.topLevelWidgets() if isinstance(w, QProgressDialog) and w.isVisible()]
+
+    def scenario():
+        run_busy(None, "kurz", time.sleep, 0.1)        # Fenster wird gar nicht erst nötig
+        run_busy(None, "lang", time.sleep, 0.6)        # Fenster erscheint kurz
+        nested = QEventLoop()                          # wie der offene Importdialog
+        for delay in (1000, 4700):
+            QTimer.singleShot(delay, lambda: seen.append(len(visible_progress())))
+        QTimer.singleShot(4800, nested.quit)
+        nested.exec()
+        outer.quit()
+
+    outer = QEventLoop()
+    QTimer.singleShot(0, scenario)
+    outer.exec()
+    assert seen == [0, 0]
+
+
 def test_selftest_passes(app):
     from graph_plotter.selftest import run_selftest
     assert run_selftest() == 0

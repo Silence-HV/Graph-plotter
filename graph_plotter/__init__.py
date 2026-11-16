@@ -1,3 +1,3 @@
 """Graph Plotter – Messdaten aus CSV- und Excel-Dateien darstellen."""
 
-VERSION = "3.2"
+VERSION = "3.2.1"
