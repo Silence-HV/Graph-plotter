@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QH
                                QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
 from .. import VERSION
+from ..combine import combine_repeats
 from ..exporting import FORMATS, export_bytes, export_plot, normalize_extension, options_from_settings
 from ..loaders import (CSV_EXTENSIONS, EXCEL_EXTENSIONS, LoadError, default_spec, is_supported,
                        load_datasets, read_table)
@@ -25,6 +26,7 @@ from .dataset_list import DatasetListView, DatasetModel
 from .import_dialog import ImportDialog
 from .panels import AppearancePanel, AxesPanel, DatasetEditor, ExportPanel, scrollable
 from .plot_view import PlotView
+from .tasks import Cancelled, run_busy
 
 EXPORT_FILTERS = [(f"{text} (*.{ext})", ext) for ext, (text, _) in FORMATS.items()]
 LIVE_DELAY_MS = 250
@@ -210,7 +212,10 @@ class MainWindow(QMainWindow):
         for key, tip, slot in (("add", "Dateien laden (Strg+O)", lambda: self.choose_files()),
                                ("remove", "Ausgewählte entfernen (Entf)", self.remove_selected),
                                ("up", "Nach oben (Strg+↑)", lambda: self.move_selected(-1)),
-                               ("down", "Nach unten (Strg+↓)", lambda: self.move_selected(1))):
+                               ("down", "Nach unten (Strg+↓)", lambda: self.move_selected(1)),
+                               ("merge", "Ausgewählte als Messwiederholungen zusammenfassen\n"
+                                         "(z. B. eine Datei je Messung → Mittelwert ± Fehler)",
+                                self.combine_selected)):
             button = QToolButton()
             button.setToolTip(tip)
             button.setAutoRaise(True)
@@ -220,6 +225,9 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(header)
         self.list_view = DatasetListView(self.model)
         self.list_view.selectionModel().selectionChanged.connect(self._selection_changed)
+        self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_view.customContextMenuRequested.connect(self._list_menu)
+        self.list_buttons["merge"].setEnabled(False)
         left_layout.addWidget(self.list_view, 1)
         for key, slot in ((QKeySequence.StandardKey.Delete, self.remove_selected),
                           ("Ctrl+Up", lambda: self.move_selected(-1)),
@@ -288,7 +296,7 @@ class MainWindow(QMainWindow):
         for key, button in self.list_buttons.items():
             button.setIcon(icons.icon(key, color))
         self.plot_view.refresh_icons()
-        self.setWindowIcon(icons.icon("chart", theme.colors()["accent"]))
+        self.setWindowIcon(icons.app_icon())
 
     # ================================================================== Zustand
 
@@ -443,6 +451,61 @@ class MainWindow(QMainWindow):
         rows = self.list_view.selected_rows()
         self.editor.set_targets([self.datasets[r] for r in rows],
                                 [self.model.color_of(r) for r in rows])
+        self.list_buttons["merge"].setEnabled(len(rows) >= 2)
+
+    def _list_menu(self, pos) -> None:
+        rows = self.list_view.selected_rows()
+        if not rows:
+            return
+        color = theme.colors()["text"]
+        menu = QMenu(self)
+        menu.addAction(icons.icon("eye", color), "Ein-/Ausblenden", self.toggle_selected)
+        combine = menu.addAction(icons.icon("merge", color), "Als Messwiederholungen zusammenfassen",
+                                 self.combine_selected)
+        combine.setEnabled(len(rows) >= 2)
+        menu.addSeparator()
+        menu.addAction(icons.icon("up", color), "Nach oben", lambda: self.move_selected(-1))
+        menu.addAction(icons.icon("down", color), "Nach unten", lambda: self.move_selected(1))
+        menu.addSeparator()
+        menu.addAction(icons.icon("remove", color), "Entfernen", self.remove_selected)
+        menu.exec(self.list_view.viewport().mapToGlobal(pos))
+
+    def toggle_selected(self) -> None:
+        rows = self.list_view.selected_rows()
+        target = not all(self.datasets[r].visible for r in rows)
+        for row in rows:
+            self.datasets[row].visible = target
+            self.model.row_changed(row)
+        self.schedule()
+
+    def combine_selected(self) -> None:
+        """Ausgewählte Datensätze zu einem Statistik-Datensatz (Mittelwert ± Fehler) zusammenfassen."""
+        rows = self.list_view.selected_rows()
+        if len(rows) < 2:
+            self.statusBar().showMessage("Zum Zusammenfassen mindestens zwei Datensätze auswählen "
+                                         "(Strg- oder Umschalt-Klick).", 5000)
+            return
+        selected = [self.datasets[r] for r in rows]
+        try:
+            result = combine_repeats(selected)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zusammenfassen", str(exc))
+            return
+        result.dataset.color = self._next_color()
+        for ds in selected:
+            ds.visible = False
+        position = rows[-1] + 1
+        self.datasets.insert(position, result.dataset)
+        self.model.refresh()
+        self.list_view.select_rows([position])
+        self._selection_changed()
+        self.replot()
+        message = (f"„{result.dataset.name}“ erstellt. Die {len(selected)} Einzeldatensätze wurden ausgeblendet "
+                   "(Auge-Symbol zum Einblenden).")
+        if result.note:
+            QMessageBox.information(self, "Zusammenfassen", f"{message}\n\n{result.note}")
+        else:
+            self.statusBar().showMessage(message, 6000)
 
     def _editor_changed(self) -> None:
         for row in self.list_view.selected_rows():
@@ -540,17 +603,20 @@ class MainWindow(QMainWindow):
                 errors.append(f"{name}: Dateityp wird nicht unterstützt.")
                 continue
             try:
-                table = read_table(path)
+                table = run_busy(self, f"„{name}“ wird gelesen …", read_table, path)
                 spec = default_spec(path, table, statistics=statistics)
                 if self.act_import_dialog.isChecked():
                     dialog = ImportDialog(self, path, table, spec)
                     if dialog.exec() != QDialog.DialogCode.Accepted:
                         continue
                     spec, table = dialog.spec(), dialog.table
-                result = load_datasets(spec, table)
+                result = run_busy(self, f"Daten aus „{name}“ werden verarbeitet …", load_datasets, spec, table)
             except LoadError as exc:
                 errors.append(f"{name}: {exc}")
                 continue
+            except Cancelled:
+                notes.append(f"{name}: Laden abgebrochen – weitere Dateien wurden nicht geladen.")
+                break
             if not result.datasets:
                 errors.append(f"{name}: keine gültigen Zahlendaten gefunden.")
                 continue
@@ -566,7 +632,6 @@ class MainWindow(QMainWindow):
                 notes.append(f"{name}: Spalten ohne gültige Werte ignoriert: {', '.join(result.empty_columns)}.")
             if result.x_is_time:
                 notes.append(f"{name}: X-Werte sind Datum/Uhrzeit – dargestellt als Sekunden ab dem ersten Wert.")
-
         if len(self.datasets) > first_new:
             self.model.refresh()
             self.list_view.select_rows(list(range(first_new, len(self.datasets))))
@@ -780,9 +845,11 @@ class MainWindow(QMainWindow):
                 "Die aktuell geladenen Datensätze werden ersetzt. Fortfahren?") != QMessageBox.StandardButton.Yes:
             return
         try:
-            project = load_project(path)
+            project = run_busy(self, f"Projekt „{Path(path).name}“ wird geladen …", load_project, path)
         except LoadError as exc:
             QMessageBox.critical(self, "Projekt öffnen", str(exc))
+            return
+        except Cancelled:
             return
         self._project_path = path
         self._last_dir = str(Path(path).parent)

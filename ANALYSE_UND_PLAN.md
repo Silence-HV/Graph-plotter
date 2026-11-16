@@ -151,9 +151,13 @@ requirements.txt           Laufzeit-Abhängigkeiten
 requirements-dev.txt       Zusätzlich für Tests und Build
 ```
 
-Tests ausführen: `.venv\Scripts\python -m pytest` (78 Tests, Oberflächentests laufen ohne Fenster)
+Ab v3.2 zusätzlich: `timeparse.py` (Zeitstempel als Text), `combine.py` (Messwiederholungen aus
+mehreren Datensätzen), `selftest.py` (Selbsttest der ausgelieferten Fassung), `ui/tasks.py` (Laden im
+Hintergrund), `installer.iss` (Installer), `README.md` (Anwender-Anleitung).
+
+Tests ausführen: `.venv\Scripts\python -m pytest` (109 Tests, Oberflächentests laufen ohne Fenster)
 Abhängigkeiten installieren: `.venv\Scripts\python -m pip install -r requirements-dev.txt`
-`.exe` bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter_v31.exe`
+Bauen: `.venv\Scripts\python build_exe.py` → `dist\GraphPlotter\`, portables ZIP, ggf. Installer
 
 ---
 
@@ -273,7 +277,7 @@ Die Ausschnitt-Funktionen sind nur aktiv, solange tatsächlich gezoomt ist. Lini
 X-Grenzen jetzt bis an den Achsenrand, statt am letzten Punkt im Bereich zu enden. Auch ein Zoom zwischen
 zwei Messpunkten zeigt das verbindende Segment.
 
-### Tastenkürzel
+### Tastenkürzel (Stand v3.1)
 
 | Kürzel | Funktion |
 |--------|----------|
@@ -295,3 +299,57 @@ zwei Messpunkten zeigt das verbindende Segment.
 - Die automatische Kopfzeilen-Erkennung verlangt zwei aufeinanderfolgende Zahlenzeilen; steht direkt
   nach der ersten Messzeile eine fehlerhafte Zeile, den Datenbeginn im Importdialog korrigieren.
 - Zahlen mit genau einem Trennzeichen gelten als Dezimalzahl: „1.000“ wird als 1,0 gelesen, nicht als 1000.
+
+---
+
+## 9. Import, Leistung und Auslieferung (v3.2)
+
+### Import
+
+| Vorher | Jetzt |
+|--------|-------|
+| Trennzeichen nur Semikolon, Tab, Komma | zusätzlich **Leerzeichen** (auch mehrfach); Erkennung bewertet Spaltenzahl und Zahlenanteil, damit „0,5 1,5“ (Leerzeichen + Dezimalkomma) und „0.5, 1.5“ (Komma) richtig getrennt werden |
+| Kodierung UTF-8/Windows-1252 | zusätzlich **UTF-16** mit und ohne BOM (Excel „Unicode-Text“) |
+| Datum/Uhrzeit nur als Excel-Zelle | auch **als Text**: ISO 8601, deutsch (16.11.2026 12:00:01,5), US, reine Uhrzeit; gemischte Genauigkeit; Sprung über Mitternacht |
+| `.xlsx`, `.xls` | zusätzlich **`.ods`** (LibreOffice), **`.xlsb`**; Text auch `.asc`, `.prn` |
+| Wiederholungen nur als Spalten einer Datei | auch **eine Datei je Messung**: Datensätze auswählen → „Zusammenfassen“; bei unterschiedlichen X-Werten Interpolation auf das Raster der ersten Reihe (mit Hinweis); bleibt im Projekt erhalten |
+
+### Leistung (gemessen, ohne Messwerkzeug-Overhead)
+
+| Datei | v3.1 | v3.2 | Speicher v3.1 → v3.2 |
+|-------|-----:|-----:|-----:|
+| CSV, 100.000 Zeilen × 4 | 3,2 s | 0,07 s | 55 → 22 MB |
+| CSV, 1.000.000 Zeilen × 4 | 34 s | 0,8 s | 557 → 220 MB |
+| Excel, 100.000 Zeilen × 4 | 11 s | 0,5 s | 38 → 38 MB |
+
+Ursache vorher: jede Zelle wurde einzeln als Python-Objekt verarbeitet. Jetzt liest pandas (CSV) bzw.
+calamine (Tabellen) spaltenweise; nur Zellen, die dieser Weg nicht versteht (z. B. „1.000,5“), werden
+einzeln geprüft. Laden läuft im Hintergrund; dauert es länger als 0,4 s, erscheint ein Fortschrittsfenster
+mit „Abbrechen“.
+
+Nicht beseitigt: Alle Daten liegen im Arbeitsspeicher, und das Neuzeichnen von ca. 3 Mio. Punkten dauert
+auf dem Bildschirm etwa 1,4 s – unabhängig davon, ob Marker gezeichnet werden.
+
+### Auslieferung
+
+- `build_exe.py` baut standardmäßig einen **Programmordner** (`dist\GraphPlotter`, 155 MB), daraus ein
+  **portables ZIP** (69 MB) und – wenn Inno Setup 6 installiert ist – einen **Installer**
+  (`installer.iss`: ohne Administratorrechte installierbar, Startmenü, optional Desktop-Symbol und
+  Dateizuordnung für `.gplot`). `--onefile` erzeugt weiterhin eine einzelne `.exe`.
+- Nicht genutzte Qt-Teile (Software-OpenGL, Qt Quick/QML, PDF-Anzeige; 38 MB) werden entfernt.
+- **Programmsymbol** und **Versionsinfo** (Dateieigenschaften) werden beim Build erzeugt.
+- **Lizenztexte** aller 19 mitgelieferten Pakete liegen in `Lizenzen\` samt Übersicht und LGPL-Hinweis
+  zu Qt; die Ordner-Variante erlaubt den Austausch der Qt-Bibliotheken.
+- **`README.md`** ist die Anwender-Anleitung (GitHub-Startseite, im Programmordner als `LIESMICH.txt`).
+- **Selbsttest:** `GraphPlotter.exe --selbsttest` lädt erzeugte Testdateien (CSV, UTF-16-Text,
+  Zeitstempel, Excel), fasst zusammen, exportiert in alle Formate und baut das Hauptfenster auf.
+  Rückgabewert 0 = bestanden; Protokoll in `%TEMP%\graphplotter_selbsttest.txt`.
+
+### Noch offen vor einer breiten Verteilung
+
+- Praxistest mit echten Messdateien und Export in Word/Inkscape.
+- Inno Setup installieren, um den Installer zu bauen.
+- Code-Signatur (entfernt die SmartScreen-Warnung; kostenpflichtig).
+- Eine Lizenz für das Projekt selbst festlegen.
+- Weiterhin: mehrere Tabellenblöcke untereinander in einer Datei, eigene X-Spalte je Y-Spalte in einem
+  Schritt, Vorverarbeitung (E29), Kennwerte (E30), Datenexport (E31).

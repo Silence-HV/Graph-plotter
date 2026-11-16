@@ -99,9 +99,8 @@ class ImportDialog(QDialog):
 
     def _apply_table(self, spec: ImportSpec) -> None:
         self._updating = True
-        n_rows = max(len(self.table.rows), 1)
-        self.header_spin.setRange(0, n_rows)
-        self.data_spin.setRange(1, n_rows)
+        self.header_spin.setRange(0, max(len(self.table.rows), 1))   # Kopfzeile nur in der Vorschau
+        self.data_spin.setRange(1, max(self.table.n_rows, len(self.table.rows), 1))
         self.header_spin.setValue(spec.header_row + 1 if spec.header_row is not None else 0)
         self.data_spin.setValue(spec.data_start + 1)
         self._updating = False
@@ -171,8 +170,9 @@ class ImportDialog(QDialog):
         self.preview.resizeColumnsToContents()
 
         info = [self.table.info] if self.table.info else []
-        info.append(f"{len(self.table.rows)} Zeilen, {width} Spalten")
-        if len(self.table.rows) > PREVIEW_ROWS:
+        total = max(self.table.n_rows, len(self.table.rows))
+        info.append(f"{total:,} Zeilen, {width} Spalten".replace(",", "."))
+        if total > PREVIEW_ROWS:
             info.append(f"Vorschau zeigt die ersten {PREVIEW_ROWS} Zeilen")
         self.info_label.setText(" · ".join(info))
 

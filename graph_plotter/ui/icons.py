@@ -27,14 +27,24 @@ _PATHS = {
            'M21 12l-3-3M21 12l-3 3"/>',
     "zoom": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8M8 10.5h5M10.5 8v5"/>',
     "measure": '<circle cx="12" cy="12" r="6"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/>',
-    "crop": '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
+    "merge": '<path d="M4 5h3.5l4.5 7h8M4 19h3.5l4.5-7"/><path d="M17 9l3 3-3 3"/>',
+    "app": '<rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="{c}" stroke="none"/>'
+           '<path d="M6 6v12h12" stroke="#ffffff" stroke-width="1.8"/>'
+           '<path d="M8.5 14.5l3-4 2.5 2.5 3.5-5" stroke="#ffffff" stroke-width="2"/>',
+    "crop":'<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
     "page":'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
     "up": '<path d="M6 15l6-6 6 6"/>',
     "down": '<path d="M6 9l6 6 6-6"/>',
     "chart": '<path d="M4 4v16h16"/><path d="M7 15l4-5 3 3 5-7"/>',
 }
 
+APP_COLOR = "#2563eb"   # Programmsymbol (auch für die .ico-Datei der .exe)
+
 _cache: dict[tuple[str, str], QIcon] = {}
+
+
+def app_icon() -> QIcon:
+    return icon("app", APP_COLOR)
 
 
 def svg(name: str, color: str) -> str:
@@ -49,7 +59,7 @@ def icon(name: str, color: str) -> QIcon:
     if key not in _cache:
         renderer = QSvgRenderer(QByteArray(svg(name, color).encode("utf-8")))
         result = QIcon()
-        for size in (16, 24, 32, 48):
+        for size in (16, 24, 32, 48, 64, 128, 256):
             pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)

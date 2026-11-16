@@ -46,7 +46,10 @@ class DatasetModel(QAbstractListModel):
                 if ds.spec.sheet:
                     lines.append(f"Tabellenblatt: {ds.spec.sheet}")
             lines.append(f"{_count(ds.n_points)} Punkte")
-            if ds.is_statistics:
+            if ds.is_combined:
+                lines.append(f"Zusammengefasst aus {len(ds.members)} Datensätzen:")
+                lines += [f"  {m.path}" for m in ds.members]
+            elif ds.is_statistics:
                 lines.append(f"Statistik über {ds.n_repeats} Messwiederholungen")
             return "\n".join(lines)
         return None
@@ -129,7 +132,9 @@ class DatasetDelegate(QStyledItemDelegate):
         painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
         info = [f"{_count(ds.n_points)} Punkte"]
-        if ds.is_statistics:
+        if ds.is_combined:
+            info.append(f"zusammengefasst, n = {ds.n_repeats}")
+        elif ds.is_statistics:
             info.append(f"n = {ds.n_repeats}")
         if ds.axis == "Y2":
             info.append("Y2")

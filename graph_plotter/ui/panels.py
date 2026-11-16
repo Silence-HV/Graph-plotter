@@ -124,7 +124,9 @@ class DatasetEditor(QWidget):
         if len(datasets) == 1:
             self.title.setText(first.display_label)
             info = [f"{first.n_points:,} Punkte".replace(",", ".")]
-            if first.is_statistics:
+            if first.is_combined:
+                info.append(f"Mittelwert aus {first.n_repeats} Messreihen von {len(first.members)} Datensätzen")
+            elif first.is_statistics:
                 info.append(f"Mittelwert aus {first.n_repeats} Messwiederholungen")
             if first.spec is not None:
                 info.append(first.spec.path)

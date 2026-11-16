@@ -83,7 +83,13 @@ def main(argv: list[str] | None = None) -> int:
     _app.setApplicationName("Graph Plotter")
     _app.setOrganizationName("GraphPlotter")
 
+    from .ui.icons import app_icon
     from .ui.main_window import MainWindow
+
+    _app.setWindowIcon(app_icon())
+    if "--selbsttest" in argv:
+        from .selftest import run_selftest
+        return run_selftest()
 
     _window = MainWindow()
     _window.show()

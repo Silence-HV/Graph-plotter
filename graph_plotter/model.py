@@ -62,6 +62,8 @@ class Dataset:
     y_raw: Optional[np.ndarray] = None
     spec: Optional[ImportSpec] = None
     source_column: str = ""
+    # Zusammengefasster Datensatz: Import-Einstellungen der zusammengefassten Datensätze
+    members: list[ImportSpec] = field(default_factory=list)
 
     # Darstellung
     label: str = ""                # eigener Legendentext (leer = name)
@@ -79,6 +81,10 @@ class Dataset:
     @property
     def is_statistics(self) -> bool:
         return self.y_raw is not None
+
+    @property
+    def is_combined(self) -> bool:
+        return bool(self.members)
 
     @property
     def display_label(self) -> str:

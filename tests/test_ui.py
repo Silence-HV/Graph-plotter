@@ -225,6 +225,47 @@ def test_zoomed_view_export_copy_and_apply(window, tmp_path, monkeypatch):
     assert not window.plot_view.is_zoomed()  # neue Ausgangsansicht
 
 
+def test_combine_files_as_repeats(window, tmp_path):
+    paths = []
+    for i in range(3):
+        path = tmp_path / f"lauf{i}.csv"
+        path.write_text("t;U\n" + "\n".join(f"{t};{t + i}" for t in range(5)), encoding="utf-8")
+        paths.append(str(path))
+    window.add_files(paths)
+    assert len(window.datasets) == 3
+    window.list_view.select_rows([0, 1, 2])
+    window._selection_changed()
+    assert window.list_buttons["merge"].isEnabled()
+    window.combine_selected()
+    combined = window.datasets[3]
+    assert combined.is_combined and combined.n_repeats == 3
+    assert [d.visible for d in window.datasets] == [False, False, False, True]
+    assert window.list_view.selected_rows() == [3]
+    assert window._has_plot
+
+    window.toggle_selected()
+    assert not combined.visible
+
+
+def test_run_busy_returns_result_and_raises(app):
+    import time
+
+    from graph_plotter.ui.tasks import run_busy
+
+    def slow(value):
+        time.sleep(0.6)  # länger als die Anzeigeschwelle: Fortschrittsfenster erscheint
+        return value * 2
+
+    assert run_busy(None, "Test", slow, 21) == 42
+    with pytest.raises(ZeroDivisionError):
+        run_busy(None, "Test", lambda: 1 / 0)
+
+
+def test_selftest_passes(app):
+    from graph_plotter.selftest import run_selftest
+    assert run_selftest() == 0
+
+
 def test_page_mode_and_theme(window, csv_file):
     window.add_files([csv_file])
     window.plot_view.set_page_mode(True)

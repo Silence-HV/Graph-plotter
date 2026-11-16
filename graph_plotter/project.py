@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import VERSION
+from .combine import combine_repeats
 from .loaders import LoadError, Table, load_datasets, read_table
 from .model import Dataset, ImportSpec
 from .plotting import PlotSettings
@@ -23,20 +24,26 @@ class ProjectData:
     problems: list[str] = field(default_factory=list)
 
 
+def _spec_entry(spec: ImportSpec, base: Path) -> dict:
+    data = spec.to_dict()
+    abs_path = str(Path(data["path"]).resolve())
+    data["path"] = abs_path
+    try:
+        data["relative_path"] = os.path.relpath(abs_path, base)
+    except ValueError:  # anderes Laufwerk
+        data["relative_path"] = None
+    return data
+
+
 def save_project(path: str, datasets: list[Dataset], settings: PlotSettings) -> None:
     base = Path(path).resolve().parent
     entries = []
     for ds in datasets:
-        if ds.spec is None:
-            continue
-        spec = ds.spec.to_dict()
-        abs_path = str(Path(spec["path"]).resolve())
-        spec["path"] = abs_path
-        try:
-            spec["relative_path"] = os.path.relpath(abs_path, base)
-        except ValueError:  # anderes Laufwerk
-            spec["relative_path"] = None
-        entries.append({"spec": spec, "style": ds.style_dict()})
+        if ds.is_combined:
+            entries.append({"members": [_spec_entry(m, base) for m in ds.members],
+                            "name": ds.name, "style": ds.style_dict()})
+        elif ds.spec is not None:
+            entries.append({"spec": _spec_entry(ds.spec, base), "style": ds.style_dict()})
 
     data = {
         "app": "GraphPlotter",
@@ -74,12 +81,12 @@ def load_project(path: str) -> ProjectData:
     datasets: list[Dataset] = []
     problems: list[str] = []
 
-    for entry in data["datasets"]:
-        raw_spec = dict(entry.get("spec", {}))
+    def load_one(raw: dict) -> Dataset | None:
+        raw_spec = dict(raw)
         resolved = _resolve(raw_spec, base)
         if resolved is None:
             problems.append(f"Datei nicht gefunden: {raw_spec.get('path', '?')}")
-            continue
+            return None
         raw_spec["path"] = resolved
         spec = ImportSpec.from_dict(raw_spec)
         key = (spec.path, spec.sheet)
@@ -89,11 +96,24 @@ def load_project(path: str) -> ProjectData:
             result = load_datasets(spec, tables[key])
         except LoadError as exc:
             problems.append(f"{Path(spec.path).name}: {exc}")
-            continue
+            return None
         if not result.datasets:
             problems.append(f"{Path(spec.path).name}: keine gültigen Daten mehr in der gewählten Spalte.")
-            continue
-        ds = result.datasets[0]
+            return None
+        return result.datasets[0]
+
+    for entry in data["datasets"]:
+        if "members" in entry:
+            members = [m for m in (load_one(raw) for raw in entry["members"]) if m is not None]
+            try:
+                ds = combine_repeats(members, entry.get("name")).dataset
+            except ValueError as exc:
+                problems.append(f"„{entry.get('name', 'Zusammenfassung')}“: {exc}")
+                continue
+        else:
+            ds = load_one(entry.get("spec", {}))
+            if ds is None:
+                continue
         ds.apply_style(entry.get("style", {}))
         datasets.append(ds)
 
