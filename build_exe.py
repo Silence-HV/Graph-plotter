@@ -269,6 +269,7 @@ def main() -> int:
     app_dir = DIST / APP_NAME
     print(f"\nNicht benötigte Qt-Teile entfernt: {prune(app_dir):.0f} MB")
     shutil.copy2(PROJECT / "README.md", app_dir / "LIESMICH.txt")
+    shutil.copy2(PROJECT / "LICENSE", app_dir / "LIZENZ.txt")
     write_licenses(app_dir / "Lizenzen")
     size = sum(f.stat().st_size for f in app_dir.rglob("*") if f.is_file())
     print(f"\n[OK] Programmordner: {app_dir} ({size / 2**20:.0f} MB)")
@@ -289,7 +290,8 @@ def main() -> int:
         return 0
     try:
         subprocess.run([str(iscc), f"/DAppVersion={version}", f"/DSourceDir={app_dir}",
-                        f"/DOutputDir={DIST}", f"/DIconFile={icon}", str(PROJECT / "installer.iss")],
+                        f"/DOutputDir={DIST}", f"/DIconFile={icon}", f"/DLicenseFile={PROJECT / 'LICENSE'}",
+                        str(PROJECT / "installer.iss")],
                        check=True, cwd=str(PROJECT))
     except subprocess.CalledProcessError as exc:
         print(f"\n[FEHLER] Inno Setup ist fehlgeschlagen: {exc}")

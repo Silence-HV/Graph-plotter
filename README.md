@@ -95,6 +95,12 @@ Bildschirm, Paper (einspaltig/zweispaltig), Abschlussarbeit oder Präsentation. 
 Bei einem unerwarteten Fehler zeigt das Programm eine Meldung und schreibt Details in
 `%APPDATA%\GraphPlotter\graphplotter.log`. Diese Datei hilft bei der Fehlersuche.
 
+## Lizenz
+
+Graph Plotter steht unter der [MIT-Lizenz](LICENSE): Nutzung, Weitergabe und Änderung sind frei,
+solange der Lizenzhinweis erhalten bleibt; es gibt keine Gewährleistung. Die mitgelieferten
+Bibliotheken haben eigene Lizenzen (Ordner `Lizenzen` im Programmordner).
+
 ---
 
 ## Für Entwickler

@@ -345,11 +345,13 @@ auf dem Bildschirm etwa 1,4 s – unabhängig davon, ob Marker gezeichnet werden
   Zeitstempel, Excel), fasst zusammen, exportiert in alle Formate und baut das Hauptfenster auf.
   Rückgabewert 0 = bestanden; Protokoll in `%TEMP%\graphplotter_selbsttest.txt`.
 
+Der Installer (`GraphPlotter_v3.2_Setup.exe`, 50 MB) wurde unbeaufsichtigt installiert, per Selbsttest
+geprüft und rückstandsfrei deinstalliert. Das Projekt steht unter der **MIT-Lizenz** (`LICENSE`); der
+Installer zeigt sie an, im Programmordner liegt sie als `LIZENZ.txt`.
+
 ### Noch offen vor einer breiten Verteilung
 
 - Praxistest mit echten Messdateien und Export in Word/Inkscape.
-- Inno Setup installieren, um den Installer zu bauen.
 - Code-Signatur (entfernt die SmartScreen-Warnung; kostenpflichtig).
-- Eine Lizenz für das Projekt selbst festlegen.
 - Weiterhin: mehrere Tabellenblöcke untereinander in einer Datei, eigene X-Spalte je Y-Spalte in einem
   Schritt, Vorverarbeitung (E29), Kennwerte (E30), Datenexport (E31).

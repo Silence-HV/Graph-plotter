@@ -13,6 +13,9 @@
 #ifndef IconFile
   #define IconFile "build\graph_plotter.ico"
 #endif
+#ifndef LicenseFile
+  #define LicenseFile "LICENSE"
+#endif
 
 [Setup]
 AppId={{8E4C2B7A-5D1F-4A3E-9C6B-2F7D1E0A4B93}
@@ -24,6 +27,7 @@ DefaultGroupName=Graph Plotter
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\GraphPlotter.exe
 SetupIconFile={#IconFile}
+LicenseFile={#LicenseFile}
 OutputDir={#OutputDir}
 OutputBaseFilename=GraphPlotter_v{#AppVersion}_Setup
 Compression=lzma2/max
@@ -49,6 +53,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [Icons]
 Name: "{group}\Graph Plotter"; Filename: "{app}\GraphPlotter.exe"
 Name: "{group}\Anleitung"; Filename: "{app}\LIESMICH.txt"
+Name: "{group}\Lizenz"; Filename: "{app}\LIZENZ.txt"
 Name: "{group}\Graph Plotter deinstallieren"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Graph Plotter"; Filename: "{app}\GraphPlotter.exe"; Tasks: desktopicon
 
